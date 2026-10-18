@@ -40,7 +40,7 @@ Tipp: Pro Symbol nur einen Chart mit dem EA und eine eigene `MagicNumber` je Cha
 
 ## Bedienung
 
-**Info-Bereich (links oben, immer sichtbar):** Modus, Spread aktuell/maximal, ATR, Tagesergebnis, Status des Verlustlimits, Blockadegrund (falls der Handel gerade gesperrt ist), letzter Hinweis (z. B. „Lot zu klein“).
+**Info-Bereich (links oben, immer sichtbar, auf dunklem Hintergrund):** Modus, Kosten aktuell/maximal (Spread + Kommission), ATR, Serverzeit mit Handelsfenster, Tagesergebnis, Status des Verlustlimits, Blockadegrund (falls der Handel gerade gesperrt ist), Telegram-Status (aus / verbunden / Fehler mit Code), letzter Hinweis (z. B. „Lot zu klein“).
 
 **Signal-Fenster (nur Modus Manuelle Freigabe):** Bei einem Signal erscheint ein Fenster mit Richtung, Einstieg, SL, TP, Lot, Spread, CRV und Restzeit. Dazu Alarm, Ton und optional Push.
 
@@ -89,8 +89,9 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 | `TrailingSchrittATR` | 0.1 | SL wird nur nachgezogen, wenn er sich um mind. x × ATR verbessert |
 | `RisikoProzent` | 1.0 | Risiko pro Trade in % vom Equity |
 | `MaxLot` | 0.01 | Harter Lot-Deckel für den Live-Start |
-| `MaxSpreadPunkte` | 0 | Max. Spread in Punkten; 0 = automatisch |
-| `SpreadAnteilTP` | 0.25 | Automatik: Spread muss kleiner sein als dieser Anteil der TP-Distanz |
+| `MaxSpreadPunkte` | 0 | Max. Kosten (Spread + Kommission) in Punkten; 0 = automatisch |
+| `SpreadAnteilTP` | 0.25 | Automatik: Kosten (Spread + Kommission) müssen kleiner sein als dieser Anteil der TP-Distanz |
+| `KommissionProLot` | 0.0 | Kommission pro Lot, Hin- und Rückweg zusammen, in Kontowährung (ECN-Konten); 0 = keine |
 | `HandelStart` | 08:00 | Beginn Handelsfenster (Serverzeit, HH:MM) |
 | `HandelEnde` | 20:00 | Ende Handelsfenster (Serverzeit); Fenster über Mitternacht ist möglich |
 | `TagesVerlustProzent` | 3.0 | Verlustlimit je Tag vom Tagesbeginn-Equity; danach keine neuen Trades bis zum nächsten Tag (0 = aus) |
@@ -98,6 +99,61 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 | `PauseNachVerlusten` | 3 | Pause nach N Verlusten in Folge (0 = aus) |
 | `PauseMinuten` | 30 | Länge der Pause |
 | `MagicNumber` | 26101801 | Kennung der EA-Trades |
+| `TelegramAktiv` | false | Telegram-Fernbedienung ein/aus (im Strategietester immer aus) |
+| `TelegramToken` | leer | Bot-Token von @BotFather (nie weitergeben) |
+| `TelegramChatID` | leer | Deine Chat-ID; nur dieser Chat darf den EA steuern |
+| `TelegramAbfrageSek` | 2 | Abfrageintervall in Sekunden |
+| `TelegramMeldeSchliessung` | true | Nachricht, sobald eine Position geschlossen wurde (mit Ergebnis und Grund TP/SL/manuell, falls erkennbar) |
+
+## ECN-Symbole (.ecn)
+
+Bei ECN-Konten ist der Spread sehr klein, dafür kommt eine **Kommission pro Lot** dazu. Sie gehört zu den Handelskosten, deshalb rechnet der EA sie mit:
+
+- Kosten = Spread + Kommission (beides in Punkten). Diese Kosten werden gegen die erlaubte Obergrenze geprüft; der Grund steht im Info-Bereich („Kosten zu hoch (Spread X + Komm. Y > Z Pkt)“).
+- Die Kommission fließt in die Lotberechnung ein: Verlust pro Lot = SL-Verlust + Kommission. So bleibt das Risiko in Prozent des Equity eingehalten.
+
+**Kommission eintragen:** In MT4 in der Marktübersicht (Strg+M) das Symbol mit Rechtsklick → **Spezifikation** öffnen und die Kommission ablesen. Bei `KommissionProLot` den Betrag für **Hin- und Rückweg zusammen** in Kontowährung eintragen. Nennt der Broker nur „pro Seite“, den Wert verdoppeln. Im Zweifel beim Broker nachfragen; einen geschätzten Wert nicht übernehmen.
+
+**Empfohlenes Symbol:** `EURUSD.ecn` im M1-Chart. Dort ist der Spread klein und die Kosten sind gut planbar.
+
+**Krypto (z. B. BTCUSD) ist ungeeignet:** Der Spread ist dort größer als die typische Bewegung in einer Minute. Der Kostenfilter würde fast jedes Signal sperren, und was durchkommt, hat kaum Chance, die Kosten zu verdienen.
+
+## Freigabe per Handy (Telegram)
+
+**Kernaussage:** Statt am PC auf den Knopf zu klicken, bekommst du das Signal als Telegram-Nachricht mit den Knöpfen **JA** und **NEIN**. Ein Druck auf JA wirkt genau wie der Klick auf „[+] Ausführen“ am PC: Der EA rechnet neu und prüft alle Filter, bevor er handelt. Der PC mit MT4 muss dafür laufen.
+
+**Einrichtung, Schritt für Schritt:**
+
+1. Telegram-App installieren, darin **@BotFather** öffnen, `/newbot` senden, einen Namen vergeben und den **Token** kopieren (sieht aus wie `123456789:ABC...`).
+2. Den neuen Bot in Telegram suchen, öffnen und **Start** drücken (oder ihm eine Nachricht schicken). Ohne diesen Schritt darf der Bot dir nicht schreiben.
+3. **Chat-ID herausfinden:** Im Browser `https://api.telegram.org/bot<TOKEN>/getUpdates` öffnen (`<TOKEN>` durch deinen Token ersetzen) und bei `"chat":{"id":` die Zahl ablesen. Alternativ den Bot **@userinfobot** nach deiner ID fragen. Diese Adresse nur im eigenen Browser öffnen, den Link nicht teilen.
+4. In MT4 **Extras → Optionen → Expert Advisors**: „WebRequest für folgende URLs erlauben“ anhaken und `https://api.telegram.org` hinzufügen. Ohne diesen Schritt meldet der EA Fehler 4060.
+5. EA-Eigenschaften → **Eingaben**: `TelegramAktiv` = true, `TelegramToken` und `TelegramChatID` eintragen.
+6. **Test:** In Telegram `/status` an den Bot schicken. Er antwortet mit Modus, Kosten, Tagesergebnis, offenen Positionen und dem Grund einer eventuellen Sperre. Beim Start schickt der EA außerdem eine Begrüßung.
+
+**Was du bekommst und steuern kannst:**
+
+| Aktion | Wirkung |
+|---|---|
+| Signal im Modus `MANUELLE_FREIGABE` | Nachricht mit Symbol, Kauf/Verkauf, Einstieg, SL, TP, Lot, Kosten, CRV und den Knöpfen JA / NEIN (zusätzlich zum Chart-Fenster) |
+| Signal im Modus `NUR_SIGNALE` | Nachricht ohne Knöpfe |
+| Modus `VOLLAUTOMATIK` | Nur eine Info-Nachricht nach der Ausführung |
+| **JA** | Order wird wie bei „[+] Ausführen“ eröffnet; die Nachricht zeigt „ausgeführt: #Ticket @Preis“ oder den Grund, warum nicht |
+| **NEIN** | Signal wird verworfen, die Nachricht zeigt „verworfen“ |
+| Signal abgelaufen oder am PC erledigt | Nachricht wird entsprechend geändert, die Knöpfe verschwinden |
+| `/status` | Statusbericht |
+| `/stop` | Neue Signale pausieren (Info-Bereich zeigt „Pausiert per Telegram“) |
+| `/start` | Pause aufheben |
+| Position geschlossen | „Position #x geschlossen: +/-Betrag (TP/SL/manuell)“ (abschaltbar mit `TelegramMeldeSchliessung`) |
+
+**Sicherheit:**
+
+- Den **Token niemals** in Dateien, Screenshots, Chats oder ins Repo schreiben. Er gehört nur in die EA-Eingaben. Ist er doch rausgegangen: bei @BotFather `/revoke` senden und einen neuen Token eintragen.
+- Der EA reagiert nur auf die eingetragene `TelegramChatID`; Nachrichten und Knopfdrücke aus anderen Chats werden ignoriert (Vermerk im Journal).
+- Pro Bot nur **einen** EA/Chart betreiben. Mehrere EAs mit demselben Bot nehmen sich gegenseitig die Updates weg.
+- Der PC mit MT4 muss laufen und online sein.
+- Ein Signal gilt nur `SignalGueltigSek` (Standard 45 Sekunden). Bei schlechtem Netz kommt die Nachricht oder dein Druck evtl. zu spät: Dann verfällt das Signal und es passiert nichts.
+- Hat der Bot einen Webhook gesetzt, liefert Telegram keine Updates per Abfrage (Fehler 409 im Info-Bereich).
 
 ## Backtest (Strategietester)
 
@@ -112,7 +168,7 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 ## Risiko-Hinweise
 
 - **CFD- und Forex-Handel mit Hebel kann zum Verlust des gesamten eingesetzten Kapitals führen.** Handle nur mit Geld, dessen Verlust du verkraftest.
-- **Der Spread frisst Scalping-Gewinne.** Bei kleinen Zielen ist der Spread ein großer Teil des möglichen Gewinns; dazu kommen Kommission, Slippage und Requotes. Deshalb sperrt der EA bei zu hohem Spread. Der Backtest ist zu optimistisch, wenn er mit zu niedrigem Spread rechnet.
+- **Der Spread frisst Scalping-Gewinne.** Bei kleinen Zielen ist der Spread ein großer Teil des möglichen Gewinns; dazu kommen Kommission (siehe `KommissionProLot`), Slippage und Requotes. Deshalb sperrt der EA bei zu hohem Spread. Der Backtest ist zu optimistisch, wenn er mit zu niedrigem Spread rechnet.
 - **Kontobedingungen des Brokers prüfen:** Manche Broker verbieten oder begrenzen Scalping, Expert Advisors, Mindesthaltedauer von Positionen oder Handel kurz vor/nach News. Das muss vor dem Live-Einsatz mit den AGB geklärt sein.
 - **Keine Gewinnzusage.** Vergangene Ergebnisse sagen nichts über künftige aus. Das hier ist ein technisches Werkzeug, keine Anlageberatung.
 - Der EA braucht einen laufenden Rechner/VPS, Internet und eingeschaltetes Algo-Trading. Bei Verbindungsabbruch laufen offene Positionen nur mit ihrem SL/TP weiter.
@@ -125,6 +181,8 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 - Der Spread-Grenzwert gilt auch im Modus `NUR_SIGNALE`; ebenso alle anderen Filter.
 - Nach „ALLES SCHLIESSEN“ ist der Handel bis zum EA-Neustart gesperrt.
 - Verlustserie: Wird aus der Konto-Historie gelesen; die Historie muss in MT4 (Reiter „Kontohistorie“, Zeitraum „Gesamte Historie“) verfügbar sein.
+- Telegram nutzt `WebRequest` und blockiert kurz (bis 5 s Zeitlimit je Anfrage). Abfragen laufen nur im Timer, Sendungen nur bei Ereignissen (Signal, Knopfdruck, Schließung). Nach einem Netzfehler pausiert Telegram 10 Sekunden. Im Strategietester ist Telegram aus.
+- Emoji in den Nachrichten sind im Quelltext direkt eingetragen (Datei ist UTF-8 mit BOM). Falls MetaEditor sie nicht korrekt lädt, erscheinen im Telegram nur Platzhalter; die Funktion bleibt davon unberührt.
 - Der Code wurde ohne Compiler geschrieben und von Hand geprüft. Bitte einmal in MetaEditor kompilieren und Warnungen/Fehler zurückmelden.
 
 ## Fahrplan nächste Schritte
