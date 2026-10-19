@@ -10,6 +10,7 @@ Der EA ist symbolneutral (EURUSD, GBPUSD, XAUUSD, DAX/US30 und andere, auch mit 
 |---|---|
 | `MQL4/Experts/ScalpScout.mq4` | der Expert Advisor mit der Ausbruchs-Strategie (UTF-8 mit BOM, damit Umlaute in MetaEditor stimmen) |
 | `MQL4/Experts/ScalpScoutTrend.mq4` | zweiter, eigenständiger EA mit der Trend-Pullback-Strategie (AVWAP), siehe Abschnitt „Zweiter EA: ScalpScout Trend“ |
+| `MQL4/Experts/ScalpScoutAsia.mq4` | dritter, eigenständiger EA: Opening-Range-Breakout auf USDJPY zur Tokio- und London-Eröffnung inkl. Folge-Scalps, siehe Abschnitt „Dritter EA: ScalpScout Asia“ |
 | `README.md` | diese Anleitung |
 | `.gitignore` | ignoriert `*.ex4` und `*.log` |
 
@@ -217,6 +218,97 @@ Der EA ist eine **eigene Datei** (`ScalpScoutTrend.mq4`) und läuft unabhängig 
 
 **Beide EAs im Strategietester vergleichen:** Zuerst `ScalpScout` testen, dann `ScalpScoutTrend`, mit demselben Symbol, Zeitraum, Modell „Jeder Tick“ und demselben festen Spread (und gleicher `KommissionProLot`), `RisikoProzent` und `MaxLot`. Danach Anzahl Trades, Trefferquote, durchschnittliches CRV, Profitfaktor und maximalen Rückgang gegenüberstellen. Nur mit Zahlen vergleichen, nie mit dem Eindruck einzelner Trades. Der Freigabe-Modus wird im Tester automatisch zur Vollautomatik; Telegram ist im Tester aus. Das Tick-Volumen im Tester ist eine Näherung, der AVWAP daher ebenfalls.
 
+## Dritter EA: ScalpScout Asia
+
+**Kernaussage:** ScalpScout Asia nutzt aus, dass sich der Dollar-Yen-Kurs (USDJPY) rund um die Börsen-Eröffnung in Tokio und in London besonders stark bewegt. Er misst, wie weit der Kurs sich vorher bewegt hat (die „Range“), und steigt ein, sobald der Kurs deutlich und mit auffallend viel Handelsaktivität darüber oder darunter ausbricht. Danach scalpt er in diese Ausbruchsrichtung mehrfach weiter, solange das jeweilige Zeitfenster (Tokio, später London) offen ist. Feste Schutzregeln begrenzen das Risiko, ersetzen aber nie dein eigenes Urteil. Gewinne sind nicht zugesagt.
+
+Der EA ist eine **eigene Datei** (`ScalpScoutAsia.mq4`) und läuft unabhängig von `ScalpScout` und `ScalpScoutTrend`. Er hat eigene Magic Number (26101803), eigene Objekte im Chart (Präfix `SSA_`), eigene globale Variablen (`SSA_...`) für Tagesstart und Fern-Einstellungen und kennzeichnet seine Telegram-Nachrichten mit `[Asia]`. Alles andere ist aus `ScalpScout` übernommen: Freigabe-Modi (Panel [+]/[–], Telegram JA/NEIN, `NUR_SIGNALE`, `VOLLAUTOMATIK`), Lot aus Risiko % inkl. Kommission, `MaxLot`/`FernMaxLotObergrenze`, Break-even/Trailing, Schutzfilter (Handelszeit, Tageslimit, Verlustserie-Pause, max. offene Positionen, Kill-Switch, Telegram-Pause), Tagesbericht, `/diag`, `/heute`, `/status`, `/kauf`, `/verkauf` usw.
+
+**Zwei Phasen pro Serverzeit-Tag** (alle Zeiten in Serverzeit, Standardwerte):
+
+| | Phase 1 „Tokio“ | Phase 2 „London“ |
+|---|---|---|
+| Range | `RangeStart` 03:00 bis `RangeEnde` 04:00 | `RangeStart` 03:00 (gleicher Beginn) bis `LondonStart` 10:00, also die ganze Asien-Session |
+| Range gültig, wenn Breite | 0.8 bis 3.0 × ATR(H1) | 1.0 bis 5.0 × ATR(H1) (`LondonRangeMinATR`/`LondonRangeMaxATR`) |
+| Einstiegsfenster | `HandelStart` 04:00 bis `HandelEnde` 07:00 | `LondonStart` 10:00 bis `LondonEnde` 12:00 |
+
+Die London-Phase lässt sich mit `LondonAktiv = false` abschalten. Um `SchlussZeit` (13:00) werden alle eigenen Positionen geschlossen.
+
+**Regeln (nur auf der geschlossenen Kerze, einmal pro neuer M1-Kerze, je Phase):**
+
+1. **Range:** höchstes Hoch und tiefstes Tief der M1-Kerzen, deren Öffnungszeit im Range-Fenster des heutigen Tages liegt. Der EA liest sie aus der M1-Historie und funktioniert deshalb auch, wenn er erst nach dem Range-Ende angehängt wird. Gültig nur, wenn die Breite zwischen Min und Max × ATR(H1, letzte geschlossene Stunde) liegt. Die Range wird im Chart als zwei Linien gezeichnet (Tokio gold, London blau, ungültig grau).
+2. **Ausbruch (ORB, erster Trade der Phase):** Long, wenn eine Kerze nach dem Range-Ende (a) bullisch ist, (b) mit `AusbruchPufferPips` über dem Range-Hoch schließt, (c) Tick-Volumen größer als `VolumenFaktor` × Durchschnitt der `VolumenKerzen` Kerzen davor hat und (d) über der EMA(50, H1) schließt (abschaltbar mit `TrendFilterAktiv`). Short ist das Spiegelbild. Das Signal gilt nur im Einstiegsfenster.
+3. **Phasen-Richtung:** Beim ersten gültigen Ausbruch steht die Richtung der Phase für den Rest des Tages fest, auch wenn dieses Signal abgelehnt, verworfen oder blockiert wurde. Gegenrichtung gibt es in dieser Phase nicht mehr.
+4. **Folge-Scalps** (`FolgeTradesAktiv`): Danach prüft der EA jede neue Kerze nur noch in Phasen-Richtung. Long, wenn die Kerze bullisch ist, über dem Hoch der letzten `FolgeAusbruchKerzen` (5) Kerzen schließt, das Volumen größer als `FolgeVolumenFaktor` × Durchschnitt ist und der Kurs noch auf der Ausbruchsseite der Range-Mitte liegt (über der Mitte bei Long, unter der Mitte bei Short). Der Trendfilter gilt hier nicht.
+5. **Stop-Loss/Take-Profit:** Beim Ausbruch liegt der SL in der Range-Mitte, höchstens `SL_MaxATR` (0.75) × ATR(H1) vom Einstieg entfernt. Beim Folge-Scalp ist der SL `FolgeSL_ATR` (1.0) × ATR(M1). Immer gilt: mindestens StopLevel + Spread des Brokers, TP = `TP_CRV` (1.5) × SL-Abstand.
+6. **Grenzen:** höchstens `MaxTradesProPhase` (10) Trades je Phase und Tag (Ausbruch und Folge-Scalps zusammen), `MaxOffenePositionen` (1) gleichzeitig, `CooldownMinuten` (2) Pause nach der letzten Eröffnung oder Schließung. Die Trades je Phase werden am **Order-Kommentar** gezählt (`SSA Tokio ORB`, `SSA Tokio Folge`, `SSA London ORB`, `SSA London Folge`; Offene Orders plus Historie des heutigen Tages), damit die Zahl auch nach einem Neustart stimmt. Hand-Trades (`SSA Hand`) zählen nicht mit.
+7. **Spread-Automatik** (`MaxSpreadPunkte = 0`): Kosten (Spread + Kommission) müssen kleiner sein als `SpreadAnteilTP` × TP-Distanz des jeweiligen Trades.
+8. **Zeitausstieg:** Ab `SchlussZeit` schließt der EA einmal pro Tag alle eigenen Positionen auf diesem Symbol (mit Hinweis und Telegram-Nachricht „Zeitausstieg“), neue Einstiege sind danach blockiert. Leer = aus. Wird die Zeit per `/schluss` auf einen schon vergangenen Zeitpunkt gelegt, wirkt sie erst am nächsten Tag.
+9. Schutzfilter (Handelszeit = Tokio- **oder** London-Fenster, Tagesverlust-Limit, Pause nach Verlustserie, Kill-Switch, Telegram-Pause) gelten unverändert in allen Modi.
+
+**Pips:** 1 Pip = 10 Punkte bei 3-/5-stelligen Kursen (USDJPY: 3 Stellen). `AusbruchPufferPips` und die Pip-Anzeigen rechnen darüber.
+
+**Im Chart (links oben):** zusätzlich zu den bekannten Zeilen je eine Zeile für die Tokio- und die London-Range (Hoch, Tief, Breite in Pips und × ATR(H1), `ok`/`x` für gültig), die aktive Phase mit Zustand (z. B. „wartet auf Range“, „Range läuft“, „bereit für Ausbruch“, „Einstiegsfenster vorbei“), eine Zeile „Richtung/Trades“ (Phasen-Richtung, Trades x / max je Phase, Cooldown) und die Auswertung der letzten Kerze (Ausbruch oder Folge-Scalp, Schluss, Volumen, Trend bzw. Range-Mitte). Im Chart stehen bewusst `ok`/`x` statt Häkchen, weil MT4 die Häkchen-Zeichen dort als „?“ zeigt; Telegram nutzt ✓/✗.
+
+**Ehrlicher Hinweis zu den Kosten:** Mehr Trades bedeuten mehr Spread (und Kommission). Bei kleinen Zielen wie hier frisst das schnell einen großen Teil des Gewinns; die Spread-Automatik sperrt zu teure Momente, kann aber nicht verhindern, dass viele kleine Verluste zusammenkommen. Auf einem kleinen Konto stoppt das Tagesverlust-Limit (`TagesVerlustProzent`, Standard 3 %) den EA schon nach wenigen Verlusten bis zum nächsten Serverzeit-Tag. Erst im Strategietester und auf Demo prüfen, ob die Folge-Scalps über Kosten hinweg etwas bringen. Sie lassen sich jederzeit mit `/folge aus` abschalten.
+
+**Inputs von ScalpScout Asia** (Gruppen Betrieb, Ausstieg, Risiko, Schutzfilter und Telegram wie oben; entfallen sind `ImpulsFaktor`, `BreakoutKerzen`, `EMA_Periode`, `SL_ATR`, `TP_ATR`; `ATR_Periode` gilt nur noch für M1-Folge-SL, Break-even, Trailing und die Preisabweichung des Signals):
+
+| Input | Standard | Bedeutung |
+|---|---|---|
+| `RangeStart` / `RangeEnde` | 03:00 / 04:00 | Tokio-Range (Serverzeit); `RangeStart` ist auch der Beginn der London-Range; Beginn muss vor Ende liegen |
+| `ATR_H1_Periode` | 14 | ATR-Periode auf H1 (letzte geschlossene Stunde) |
+| `RangeMinATR` / `RangeMaxATR` | 0.8 / 3.0 | Tokio-Range gültig bei Breite von x bis y × ATR(H1) |
+| `AusbruchPufferPips` | 1.0 | Schluss muss so viele Pips jenseits der Range-Grenze liegen |
+| `VolumenFaktor` / `VolumenKerzen` | 1.3 / 20 | Ausbruchs-Volumen > x × Durchschnitt der letzten N Kerzen |
+| `TrendFilterAktiv` / `EMA_H1_Periode` | true / 50 | Long nur über, Short nur unter der EMA(H1) (nur beim Ausbruch) |
+| `LondonAktiv` | true | London-Phase ein/aus |
+| `LondonStart` / `LondonEnde` | 10:00 / 12:00 | London-Einstiegsfenster; die London-Range endet bei `LondonStart` |
+| `LondonRangeMinATR` / `LondonRangeMaxATR` | 1.0 / 5.0 | London-Range gültig bei Breite von x bis y × ATR(H1) |
+| `FolgeTradesAktiv` | true | Folge-Scalps nach dem Ausbruch |
+| `FolgeAusbruchKerzen` | 5 | Folge-Signal: Schluss über/unter Hoch/Tief der letzten N Kerzen |
+| `FolgeVolumenFaktor` | 1.1 | Folge-Signal: Volumen > x × Durchschnitt |
+| `FolgeSL_ATR` | 1.0 | Folge-SL = x × ATR(M1) |
+| `SL_MaxATR` | 0.75 | Ausbruchs-SL: Range-Mitte, höchstens x × ATR(H1) Abstand |
+| `TP_CRV` | 1.5 | TP-Abstand = x × SL-Abstand (beide Trade-Arten) |
+| `SchlussZeit` | 13:00 | Zeitausstieg (Serverzeit), leer = aus |
+| `HandelStart` / `HandelEnde` | 04:00 / 07:00 | **Tokio**-Einstiegsfenster (steuert zugleich die Schutzfilter-Handelszeit zusammen mit London) |
+| `MaxTradesProPhase` | 10 | Trades je Phase und Tag (Ausbruch + Folge) |
+| `MaxOffenePositionen` | 1 | gleichzeitig offene Positionen |
+| `CooldownMinuten` | 2 | Pause nach letzter Eröffnung/Schließung (0 = aus) |
+| `ATR_Periode` | 14 | ATR(M1) für Folge-SL, Break-even, Trailing, Preisabweichung |
+| `MagicNumber` | 26101803 | eigene Magic Number |
+
+Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE_FREIGABE` fragt der EA bei jedem Folge-Signal einzeln nach (Panel oder Telegram JA/NEIN); für aktives Scalpen ist `VOLLAUTOMATIK` nötig, die du nur nach ausführlichen Tests nutzen solltest.
+
+**Telegram-Befehle speziell für Asia** (wie die anderen Einstellungen in GlobalVariables gemerkt, in `/status`, `/hilfe`, der „abweichend“-Liste und `/reset` enthalten):
+
+| Befehl | Wirkung |
+|---|---|
+| `/range HH:MM-HH:MM` | Tokio-Range (Beginn vor Ende, Ende vor Schlusszeit); der Beginn gilt auch für London |
+| `/zeit HH:MM-HH:MM` | **Tokio**-Einstiegsfenster |
+| `/london HH:MM-HH:MM` | London-Einstiegsfenster (die London-Range endet bei dessen Beginn) |
+| `/london aus` · `/london an` | London-Phase aus/ein |
+| `/puffer X` | Ausbruchspuffer in Pips (0–10, eine Nachkommastelle) |
+| `/volumen X` | Volumen-Faktor für den Ausbruch (0.8–4.0) |
+| `/folge an\|aus` | Folge-Scalps ein/aus |
+| `/maxtrades N` | Trades je Phase (1–50) |
+| `/cooldown N` | Cooldown in Minuten (0–30) |
+| `/schluss HH:MM\|aus` | Zeitausstieg |
+
+`/diag` zeigt je Phase Range (Hoch/Tief/Breite/gültig), Zustand, Phasen-Richtung, Trades x/max, Cooldown und für die letzte Kerze, ob sie als Ausbruch oder Folge-Scalp geprüft wurde und woran es gescheitert ist (plus Zähler seit Start). `/koerper` und `/ausbruch` gibt es hier nicht.
+
+**Einrichtung:**
+
+1. `ScalpScoutAsia.mq4` nach `MQL4/Experts/` kopieren, mit F7 kompilieren (wie bei den anderen EAs).
+2. **USDJPY-M1-Chart** öffnen. **Symbolnamen beim Broker prüfen** (z. B. `USDJPY.ecn`); der EA arbeitet mit dem Symbol des Charts. Der M1-Verlauf muss mindestens bis zum Range-Beginn des Tages reichen (Chart nach oben scrollen, damit MT4 Historie lädt).
+3. **Eigenen Telegram-Bot** anlegen (@BotFather, `/newbot`) und dessen Token eintragen. **Pro EA ein Bot**, sonst stehlen sich die EAs gegenseitig die Updates (HTTP 409, JA/NEIN-Knöpfe kommen beim falschen EA an). Nachrichten beginnen mit `[Asia]`.
+4. Beim ersten Start `MANUELLE_FREIGABE` oder `NUR_SIGNALE` lassen.
+
+**Sommer-/Winterzeit:** Tokio kennt keine Sommerzeit. Verschiebt der Broker-Server Ende Oktober/Anfang November (bzw. im Frühjahr) seine Zeit um eine Stunde, verschieben sich Tokio und London relativ zur Serverzeit. Dann die Zeiten anpassen, ohne die Inputs zu ändern: `/range` (Tokio-Range, Beginn gilt auch für London), `/zeit` (Tokio-Einstieg), `/london` (London-Fenster) und `/schluss`. Wenn die Zeiten später gelegt werden, zuerst `/schluss`, dann `/london`, dann `/range` anpassen, weil jede Änderung die Reihenfolge Range < Einstieg < Schluss prüft.
+
+**Testweg:** (1) Strategietester, Modell „Jeder Tick“, mindestens 3 Monate, mit festem realistischem Spread und passender `KommissionProLot`; Tick-Volumen ist im Tester nur eine Näherung und Telegram ist dort aus. Zusätzlich einmal mit `FolgeTradesAktiv = false` testen, um den Beitrag der Folge-Scalps zu sehen. (2) Danach mindestens eine Woche `NUR_SIGNALE` bzw. Demo (Handelszeiten, Broker-Serverzeit und Range-Linien im Chart kontrollieren). (3) Erst dann live mit Freigabe (`MANUELLE_FREIGABE`), kleinem `MaxLot` und aktivem Tageslimit.
+
 ## Risiko-Hinweise
 
 - **CFD- und Forex-Handel mit Hebel kann zum Verlust des gesamten eingesetzten Kapitals führen.** Handle nur mit Geld, dessen Verlust du verkraftest.
@@ -247,9 +339,9 @@ Der EA ist eine **eigene Datei** (`ScalpScoutTrend.mq4`) und läuft unabhängig 
 6. Live-Start mit `MaxLot` 0.01, niedrigem Risiko und aktivem Tageslimit; erst nach stabilen Ergebnissen langsam steigern.
 7. Später: Newsfilter, Handelsfenster je Markt (DAX vs. US30), Teil-Schließung, Statistik-Export.
 
-## Fernsteuerung per Telegram (ab ScalpScout 1.20 / ScalpScout Trend 1.10)
+## Fernsteuerung per Telegram (ab ScalpScout 1.20 / ScalpScout Trend 1.10 / ScalpScout Asia 1.00)
 
-Beide EAs lassen sich komplett vom Handy steuern. Befehle nimmt der Bot nur aus der eingetragenen Chat-ID an. Per Telegram geänderte Werte bleiben nach einem Neustart erhalten, bis `/reset` sie löscht (Vollautomatik wird bewusst nie gespeichert).
+Alle drei EAs lassen sich komplett vom Handy steuern. Befehle nimmt der Bot nur aus der eingetragenen Chat-ID an. Per Telegram geänderte Werte bleiben nach einem Neustart erhalten, bis `/reset` sie löscht (Vollautomatik wird bewusst nie gespeichert).
 
 | Bereich | Befehle |
 |---|---|
@@ -257,6 +349,7 @@ Beide EAs lassen sich komplett vom Handy steuern. Befehle nimmt der Bot nur aus 
 | Betrieb | `/modus manuell\|signale\|auto` (auto mit Knopf-Bestätigung) · `/stop` · `/start` · `/schliessen` |
 | Einstellungen | `/risiko X` (0.1–25 %) · `/maxlot X` (bis `FernMaxLotObergrenze`) · `/limit X\|aus` · `/zeit HH:MM-HH:MM` · `/be an\|aus` · `/trailing an\|aus` · `/bericht HH:MM\|aus` |
 | Nur ScalpScout | `/koerper X` · `/volumen X` · `/ausbruch N` |
+| Nur ScalpScout Asia | `/range HH:MM-HH:MM` · `/london HH:MM-HH:MM\|aus\|an` · `/puffer X` · `/volumen X` · `/folge an\|aus` · `/maxtrades N` · `/cooldown N` · `/schluss HH:MM\|aus` (bei Asia steuert `/zeit` das Tokio-Einstiegsfenster) |
 | Nur ScalpScout Trend | `/crv X` · `/news HH:MM-HH:MM,…\|aus` · `/vwap an\|aus` · `/lunte an\|aus` · `/m5 an\|aus` |
 | Einzelne Position | `/zu TICKET` (mit Bestätigung) · `/sl TICKET PREIS\|be` · `/tp TICKET PREIS` |
 | Hand-Trades | `/kauf [LOT]` · `/verkauf [LOT]` (Vorschau + Bestätigung, Zeitfenster/News werden ignoriert) |
