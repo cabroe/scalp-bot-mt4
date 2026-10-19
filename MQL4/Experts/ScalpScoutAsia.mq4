@@ -1457,7 +1457,7 @@ void RangeLinieSetzen(string name, datetime t0, datetime t1, double preis, color
    ObjectDelete(0, name);
    if(!ObjectCreate(0, name, OBJ_TREND, 0, t0, preis, t1, preis))
       return;
-   ObjectSetInteger(0, name, OBJPROP_RAY, false);
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetInteger(0, name, OBJPROP_WIDTH, breite);
    ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
