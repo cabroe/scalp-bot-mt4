@@ -246,3 +246,20 @@ Der EA ist eine **eigene Datei** (`ScalpScoutTrend.mq4`) und läuft unabhängig 
 5. Broker-Bedingungen zu Scalping/EAs schriftlich klären.
 6. Live-Start mit `MaxLot` 0.01, niedrigem Risiko und aktivem Tageslimit; erst nach stabilen Ergebnissen langsam steigern.
 7. Später: Newsfilter, Handelsfenster je Markt (DAX vs. US30), Teil-Schließung, Statistik-Export.
+
+## Fernsteuerung per Telegram (ab ScalpScout 1.20 / ScalpScout Trend 1.10)
+
+Beide EAs lassen sich komplett vom Handy steuern. Befehle nimmt der Bot nur aus der eingetragenen Chat-ID an. Per Telegram geänderte Werte bleiben nach einem Neustart erhalten, bis `/reset` sie löscht (Vollautomatik wird bewusst nie gespeichert).
+
+| Bereich | Befehle |
+|---|---|
+| Überblick | `/hilfe` · `/status` · `/diag` · `/positionen` · `/heute` · `/bericht` |
+| Betrieb | `/modus manuell\|signale\|auto` (auto mit Knopf-Bestätigung) · `/stop` · `/start` · `/schliessen` |
+| Einstellungen | `/risiko X` (0.1–25 %) · `/maxlot X` (bis `FernMaxLotObergrenze`) · `/limit X\|aus` · `/zeit HH:MM-HH:MM` · `/be an\|aus` · `/trailing an\|aus` · `/bericht HH:MM\|aus` |
+| Nur ScalpScout | `/koerper X` · `/volumen X` · `/ausbruch N` |
+| Nur ScalpScout Trend | `/crv X` · `/news HH:MM-HH:MM,…\|aus` · `/vwap an\|aus` · `/lunte an\|aus` · `/m5 an\|aus` |
+| Einzelne Position | `/zu TICKET` (mit Bestätigung) · `/sl TICKET PREIS\|be` · `/tp TICKET PREIS` |
+| Hand-Trades | `/kauf [LOT]` · `/verkauf [LOT]` (Vorschau + Bestätigung, Zeitfenster/News werden ignoriert) |
+| Zurücksetzen | `/reset` |
+
+Hinweise: Läuft ein EA auf mehreren Charts, Telegram nur auf einem Chart aktivieren – die Befehle wirken nur dort. Jeder EA braucht einen eigenen Telegram-Bot. Der Tagesbericht kommt einmal pro Serverzeit-Tag (Input `TagesberichtZeit`, Default 23:05).
