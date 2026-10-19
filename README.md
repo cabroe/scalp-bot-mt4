@@ -8,7 +8,8 @@ Der EA ist symbolneutral (EURUSD, GBPUSD, XAUUSD, DAX/US30 und andere, auch mit 
 
 | Datei | Zweck |
 |---|---|
-| `MQL4/Experts/ScalpScout.mq4` | der Expert Advisor (UTF-8 mit BOM, damit Umlaute in MetaEditor stimmen) |
+| `MQL4/Experts/ScalpScout.mq4` | der Expert Advisor mit der Ausbruchs-Strategie (UTF-8 mit BOM, damit Umlaute in MetaEditor stimmen) |
+| `MQL4/Experts/ScalpScoutTrend.mq4` | zweiter, eigenständiger EA mit der Trend-Pullback-Strategie (AVWAP), siehe Abschnitt „Zweiter EA: ScalpScout Trend“ |
 | `README.md` | diese Anleitung |
 | `.gitignore` | ignoriert `*.ex4` und `*.log` |
 
@@ -164,6 +165,57 @@ Bei ECN-Konten ist der Spread sehr klein, dafür kommt eine **Kommission pro Lot
 5. Eingaben prüfen. Im Tester wird der Freigabe-Modus automatisch zur Vollautomatik. Hinweis: Tick-Volumen im Tester entsteht aus erzeugten Ticks und ist nur eine Näherung der Live-Aktivität.
 6. Mit „Visualisierung“ kannst du Einstiege auf dem Chart nachvollziehen.
 7. Ergebnisse nie als Prognose lesen. Erst auf Demokonto vorwärts testen (siehe Fahrplan).
+
+## Zweiter EA: ScalpScout Trend
+
+**Kernaussage:** ScalpScout Trend wartet im Ein-Minuten-Chart auf einen klaren Trend und steigt erst ein, wenn der Kurs zurückgekommen ist und wieder in Trendrichtung dreht. Als Maßstab für „zurückgekommen“ dient ein durchschnittlicher Kurs, der an einem Wendepunkt des Trends beginnt und das Handelsvolumen berücksichtigt (Anchored VWAP, kurz AVWAP). Er rechnet vorab nach, ob Chance und Risiko nach Kosten zusammenpassen, und handelt sonst nicht.
+
+Der EA ist eine **eigene Datei** (`ScalpScoutTrend.mq4`) und läuft unabhängig von `ScalpScout`. Er hat eigene Magic Number (26101802), eigene Objekte im Chart (Präfix `SST_`) und eigene globale Variablen für den Tagesstart. Beide EAs können deshalb parallel laufen, am besten auf verschiedenen Charts/Symbolen. Alles andere ist aus `ScalpScout` übernommen: Freigabe-Modi (Panel [+]/[–], Telegram JA/NEIN, `NUR_SIGNALE`, `VOLLAUTOMATIK`), Lot aus Risiko % inkl. Kommission, `MaxLot`, Break-even/Trailing, Schutzfilter (Handelszeit, Tageslimit, Verlustserie, max. Positionen, Kill-Switch, Telegram-Pause).
+
+**Regeln (nur auf der geschlossenen Kerze, einmal pro neuer M1-Kerze):**
+
+1. **Trend:** Swing-Hoch/-Tief = Kerze, deren Hoch bzw. Tief höher bzw. tiefer ist als bei den `SwingStaerke` Kerzen links und rechts (nur bestätigte). Aufwärts, wenn die letzten zwei Swing-Tiefs steigen (bei `TrendNurTiefs = false` zusätzlich die Hochs); abwärts, wenn die letzten zwei Swing-Hochs fallen (bzw. zusätzlich die Tiefs). Sonst oder bei Widerspruch: seitwärts, kein Signal („Kein Trend“).
+2. **AVWAP:** Anker ist der Beginn der Trendbewegung, also das älteste Swing-Tief der ununterbrochenen Kette steigender Tiefs (abwärts: das älteste Swing-Hoch der Kette fallender Hochs). AVWAP = Summe(typischer Preis (H+L+C)/3 × Tick-Volumen) ÷ Summe(Tick-Volumen) vom Anker bis zur letzten geschlossenen Kerze. Er wird als goldene Linie (die letzten max. 200 Kerzen) gezeichnet.
+3. **Farbwechsel:** Long: Kerze 2 rot, Kerze 1 grün, Schluss von Kerze 1 über dem AVWAP. Short spiegelbildlich. Mit `VWAP_Pflicht` muss das Tief der Formation (Kerzen 1–2) den AVWAP bis auf `VWAP_NaeheATR` × ATR erreicht haben.
+4. **Doppellunte:** Zwei der Kerzen 1–3 haben fast gleiche Tiefs (Abstand höchstens `DoppelLunteToleranzATR` × ATR) und jeweils eine untere Lunte, die länger als der Körper ist; Kerze 1 schließt grün. Short mit Hochen, oberen Lunten und roter Kerze 1. AVWAP-Nähe wie bei 3, gemessen am tiefsten Tief der Kerzen 1–3.
+5. **Stop-Loss:** Long: tiefstes Tief der Formation minus `SL_PufferATR` × ATR. Short: höchstes Hoch plus Puffer plus Spread (Short-SL wird am Ask ausgelöst).
+6. **Ziel:** Long: nächstes Swing-Hoch über dem aktuellen Ask, minus `TP_PufferATR` × ATR. Short: nächstes Swing-Tief unter dem Bid, plus Puffer. Gibt es keins, kein Signal („Kein Ziel oberhalb/unterhalb“).
+7. **MinCRV:** CRV nach Kosten = (TP-Abstand − Kosten) ÷ (SL-Abstand + Kosten), Kosten = Spread + Kommission. Unter `MinCRV` kein Signal („CRV x.x < MinCRV“). Außerdem müssen SL und TP den Mindestabstand (StopLevel) des Brokers einhalten.
+8. **Bruch-Sperre:** Aufwärtstrend: Wurde das letzte Swing-Hoch danach überschritten und ist seitdem noch kein neues Swing-Tief bestätigt, kein Long („Hoch gebrochen – warte auf höheres Tief“). Abwärts spiegelbildlich.
+9. **M5-Filter:** Long nur, wenn der letzte geschlossene M5-Schluss über der M5-EMA liegt, Short umgekehrt.
+10. **News-Pausen:** In den Fenstern von `NewsPausen` (Serverzeit) kommen keine neuen Signale und keine Ausführungen.
+
+**Ausführung:** SL und TP sind feste Preise aus der Struktur (keine ATR-Vielfachen). Beim Klick auf [+], bei Telegram JA und in der Vollautomatik prüft der EA mit dem aktuellen Kurs neu: SL/TP auf der richtigen Seite mit Mindestabstand, CRV nach Kosten weiter ≥ `MinCRV`. Sonst steht im Info-Bereich „Nicht ausgeführt: CRV nach Kursänderung zu klein“. Das Lot kommt wie gewohnt aus dem Risiko bezogen auf den SL-Abstand inkl. Kommission. Ein fester `MaxSpreadPunkte` > 0 gilt weiterhin, sonst ersetzt die CRV-Prüfung den Kostenfilter. Im Signal-Fenster stehen Signaltyp und CRV nach Kosten; solange ein Signal wartet, zeigen rote/grüne Linien SL und TP.
+
+**Hinweis:** Diese Regeln sind eine mechanische Annäherung an ein Scalping-Video. Ermessensentscheidungen eines Traders (welches Hoch „zählt“, wann ein Rücksetzer „sauber“ aussieht) lassen sich nicht 1:1 abbilden. Deshalb zuerst im Strategietester prüfen, dann auf Demo.
+
+**Empfohlene Symbole:** Index-CFD auf den S&P 500 (z. B. US500/SPX500, Name beim Broker nachsehen) oder `EURUSD.ecn`. Welche Kosten (Spread, Kommission) im Verhältnis zu den Zielen anfallen, entscheidet über das CRV und damit darüber, wie oft überhaupt gehandelt wird.
+
+**Installation:** identisch zu `ScalpScout` (Datei nach `MQL4/Experts/`, mit F7 kompilieren, Navigator aktualisieren, AutoTrading an, EA auf einen M1-Chart ziehen, „Live-Handel erlauben“). Die Info-Box zeigt zusätzlich „Strategie: Trend-Pullback | Trend | AVWAP | Ziel“ und den Grund der letzten Prüfung.
+
+**Telegram:** Alle Nachrichten dieses EAs beginnen mit `[Trend]`. **Beide EAs nie mit demselben Telegram-Bot gleichzeitig betreiben**, sonst stehlen sie sich gegenseitig die Updates (JA/NEIN-Knöpfe kommen beim falschen EA an oder gehen verloren). Dafür bei @BotFather mit `/newbot` einen zweiten Bot anlegen und dessen Token in `ScalpScoutTrend` eintragen.
+
+**Inputs von ScalpScout Trend** (Gruppen Betrieb, Ausstieg, Risiko, Schutzfilter und Telegram wie oben, Standard `MagicNumber` = 26101802; entfallen sind die Ausbruchs-Inputs sowie `SL_ATR`, `TP_ATR`, `SpreadAnteilTP`; `MaxSpreadPunkte` = 0 bedeutet hier „unbegrenzt“):
+
+| Input | Standard | Bedeutung |
+|---|---|---|
+| `ATR_Periode` | 14 | ATR-Periode auf M1 (für Puffer, Nähe, Toleranz) |
+| `SwingStaerke` | 3 | Kerzen links/rechts für Swing-Hoch/-Tief |
+| `SwingLookback` | 300 | Suchtiefe in Kerzen |
+| `TrendNurTiefs` | true | Trend nur über die Tiefs (false: zusätzlich Hochs; abwärts spiegelbildlich) |
+| `TrendM5Filter` | true | Long nur über, Short nur unter der M5-EMA |
+| `M5_EMA_Periode` | 50 | EMA-Periode auf M5 |
+| `VWAP_Pflicht` | true | Rücksetzer muss den AVWAP berührt haben |
+| `VWAP_NaeheATR` | 0.3 | „Berührt“ = bis x × ATR an den AVWAP heran |
+| `DoppelLunteAktiv` | true | Doppellunte als zweiten Signaltyp zulassen |
+| `DoppelLunteToleranzATR` | 0.15 | Max. Abstand der beiden Tiefs/Hochs in × ATR |
+| `SL_PufferATR` | 0.1 | Puffer hinter der Formation in × ATR |
+| `TP_PufferATR` | 0.05 | Puffer vor dem Ziel in × ATR |
+| `MinCRV` | 2.0 | Mindest-CRV nach Kosten |
+| `BruchSperreAktiv` | true | Bruch-Sperre (Regel 8) |
+| `NewsPausen` | leer | Serverzeit-Fenster „HH:MM-HH:MM“, mehrere mit Komma, z. B. `15:25-15:45` |
+
+**Beide EAs im Strategietester vergleichen:** Zuerst `ScalpScout` testen, dann `ScalpScoutTrend`, mit demselben Symbol, Zeitraum, Modell „Jeder Tick“ und demselben festen Spread (und gleicher `KommissionProLot`), `RisikoProzent` und `MaxLot`. Danach Anzahl Trades, Trefferquote, durchschnittliches CRV, Profitfaktor und maximalen Rückgang gegenüberstellen. Nur mit Zahlen vergleichen, nie mit dem Eindruck einzelner Trades. Der Freigabe-Modus wird im Tester automatisch zur Vollautomatik; Telegram ist im Tester aus. Das Tick-Volumen im Tester ist eine Näherung, der AVWAP daher ebenfalls.
 
 ## Risiko-Hinweise
 
