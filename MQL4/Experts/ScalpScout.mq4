@@ -5,8 +5,8 @@
 //|  vollautomatisch. Keine Gewinnzusage - Handel auf eigenes Risiko.|
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.10"
-#property description "ScalpScout - M1-Scalping-Assistent (Signal, manuelle Freigabe, Vollautomatik, Telegram)"
+#property version     "1.20"
+#property description "ScalpScout - M1-Scalping-Assistent (Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung)"
 #property strict
 
 //--- Betriebsart (muss vor den Inputs definiert sein)
@@ -70,6 +70,8 @@ input string TelegramToken         = "";      // Bot-Token von @BotFather (nie w
 input string TelegramChatID        = "";      // deine Chat-ID (nur dieser Chat darf steuern)
 input int    TelegramAbfrageSek    = 2;       // Abfrageintervall (Sekunden)
 input bool   TelegramMeldeSchliessung = true; // Nachricht bei geschlossener Position mit Ergebnis
+input string TagesberichtZeit      = "23:05"; // Tagesbericht per Telegram (Serverzeit HH:MM, leer = aus)
+input double FernMaxLotObergrenze  = 0.05;    // Per Telegram darf MaxLot höchstens bis hierhin erhöht werden (Sicherheitsgrenze)
 
 //+------------------------------------------------------------------+
 //| Konstanten und Typen                                             |
@@ -82,7 +84,7 @@ input bool   TelegramMeldeSchliessung = true; // Nachricht bei geschlossener Pos
 #define OBJ_PNL_NO       "SSC_pnl_btn_no"
 #define OBJ_INFO_BG      "SSC_info_bg"
 #define ORDER_KOMMENTAR  "ScalpScout"
-#define INFO_ZEILEN      10
+#define INFO_ZEILEN      11
 #define INFO_BREITE      540
 #define INFO_MAXZEICHEN  88
 #define PNL_ZEILEN       7
@@ -158,6 +160,62 @@ long          g_sigMsgId      = 0;     // Telegram-message_id des aktuellen Sign
 string        g_tgKopf        = "";    // Kopfzeile der Signal-Nachricht (für spätere Änderungen)
 int           g_tgOffen[];             // gemerkte offene eigene Tickets
 int           g_tgVersuche[];          // Anzahl Suchversuche je Ticket (Historie)
+
+// Fern-Einstellungen: Laufzeit-Werte (Start = Inputs, per Telegram änderbar, in GlobalVariables gemerkt)
+double        g_risiko         = 1.0;  // Risiko pro Trade in % vom Equity
+double        g_maxLot         = 0.01; // Harter Lot-Deckel
+double        g_tagesLimitProz = 3.0;  // Tagesverlust-Limit in % (0 = aus); g_tagesLimit ist der Merker "erreicht"
+double        g_impulsFaktor   = 1.8;  // Kerzenkörper muss größer sein als x * ATR
+double        g_volumenFaktor  = 1.5;  // Tick-Volumen muss größer sein als x * Durchschnitt
+int           g_breakoutKerzen = 10;   // Ausbruch über Hoch/Tief der letzten N Kerzen
+ENUM_MODUS    g_modusInput;            // Betriebsart laut Input (nach Tester-Regel) - Ziel von /reset
+string        g_fernInfo       = "";   // Liste der aus GlobalVariables geladenen Abweichungen
+long          g_cfgAutoMsg     = 0;    // Nachricht mit offener Rückfrage "Vollautomatik" (0 = keine)
+datetime      g_cfgAutoBis     = 0;    // Ablauf dieser Rückfrage (TimeLocal)
+long          g_cfgSchlMsg     = 0;    // Nachricht mit offener Rückfrage "Alle schließen" (0 = keine)
+datetime      g_cfgSchlBis     = 0;    // Ablauf dieser Rückfrage (TimeLocal)
+
+// Diagnose der letzten ausgewerteten M1-Kerze (für /diag und die Chart-Zeile)
+bool          g_dgGueltig      = false; // Werte unten sind gültig
+bool          g_dgSignalMoeglich = false; // Körper, Volumen, Richtung, Ausbruch und Trend erfüllt
+datetime      g_dgZeit         = 0;    // Zeit der ausgewerteten Kerze
+double        g_dgAtr          = 0.0;
+double        g_dgKoerperX     = 0.0;  // Körper in ATR
+double        g_dgVolX         = 0.0;  // Volumen in Vielfachen des Durchschnitts
+bool          g_dgKoerperOK    = false;
+bool          g_dgVolOK        = false;
+bool          g_dgFarbeOK      = false; // Kerze läuft in die geprüfte Richtung
+bool          g_dgAusbruchOK   = false;
+bool          g_dgTrendOK      = false;
+int           g_dgRichtung     = 1;    // geprüfte (nähere) Richtung +1/-1
+double        g_dgKostenIst    = 0.0;
+double        g_dgKostenMax    = 0.0;
+bool          g_dgKostenOK     = false;
+string        g_dgFilter       = "";   // Ergebnis der Schutzfilter
+string        g_dgErgebnis     = "";   // Endergebnis der Auswertung
+int           g_dgKerzen       = 0;    // Zähler seit Start: ausgewertete Kerzen
+int           g_dgSignale      = 0;    //   erkannte Signale
+int           g_dgTrades       = 0;    //   eröffnete Trades
+int           g_dgVerworfen    = 0;    //   nicht gehandelte Signale
+string        g_dgGrund[20];           //   Gründe dafür (gekürzt)
+int           g_dgGrundN[20];          //   Häufigkeit je Grund
+int           g_dgGrundAnz     = 0;
+
+// Weitere Fern-Einstellungen und offene Rückfragen
+bool          g_beAktiv        = true; // Break-even aktiv
+bool          g_trailingAktiv  = false; // Trailing aktiv
+int           g_berichtMin     = -1;   // Uhrzeit Tagesbericht (Minuten ab 00:00, -1 = aus)
+datetime      g_berichtTag     = 0;    // Serverzeit-Tag, für den der Bericht schon gesendet wurde
+datetime      g_berichtRetry   = 0;    // nach Sendefehler frühestens dann wieder (TimeLocal)
+long          g_cfgZuMsg       = 0;    // Rückfrage "Position schließen"
+datetime      g_cfgZuBis       = 0;
+int           g_cfgZuTicket    = 0;
+long          g_cfgHandMsg     = 0;    // Rückfrage "Hand-Trade"
+datetime      g_cfgHandBis     = 0;
+int           g_cfgHandRicht   = 0;
+double        g_cfgHandLot     = 0.0;  // 0 = Lot aus Risiko
+long          g_cfgStartMsg    = 0;    // Rückfrage "Kill-Switch-Sperre lösen"
+datetime      g_cfgStartBis    = 0;
 
 //+------------------------------------------------------------------+
 //| Hilfsfunktionen: Fehler, Zahlen, Zeit                            |
@@ -301,6 +359,477 @@ void HinweisSetzen(string text)
 }
 
 //+------------------------------------------------------------------+
+//| Fern-Einstellungen: Hilfsfunktionen und Speicherung              |
+//+------------------------------------------------------------------+
+// Die Laufzeit-Werte g_risiko, g_maxLot, g_tagesLimitProz, g_startMin/g_endeMin,
+// g_impulsFaktor, g_volumenFaktor, g_breakoutKerzen und g_modus starten mit den Inputs.
+// Per Telegram geänderte Werte liegen in GlobalVariables (SSC_<konto>_<magic>_<name>)
+// und überstehen einen Neustart. Im Strategietester wird nichts gespeichert oder geladen.
+
+string HaekchenText(bool ok)
+{
+   return ok ? "✓" : "✗";
+}
+
+// "HH:MM" aus Minuten seit 00:00
+string MinutenText(int m)
+{
+   return IntegerToString(m / 60, 2, '0') + ":" + IntegerToString(m % 60, 2, '0');
+}
+
+// "H:MM" oder "HH:MM" -> Minuten seit 00:00; -1 bei ungültiger Eingabe
+int ZeitLesen(string s)
+{
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   if(StringLen(s) == 4 && StringGetCharacter(s, 1) == ':')
+      s = "0" + s;
+   return ParseHHMM(s);
+}
+
+// Zahl aus Telegram lesen: Komma oder Punkt, optional "%" am Ende, nur Ziffern und ein Dezimaltrenner
+bool ZahlLesen(string s, double &w)
+{
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   StringReplace(s, ",", ".");
+   int n = StringLen(s);
+   if(n > 0 && StringGetCharacter(s, n - 1) == '%')
+   {
+      s = StringSubstr(s, 0, n - 1);
+      StringTrimRight(s);
+      n = StringLen(s);
+   }
+   if(n == 0 || n > 12)
+      return false;
+   int punkte = 0, ziffern = 0;
+   for(int i = 0; i < n; i++)
+   {
+      ushort c = StringGetCharacter(s, i);
+      if(c >= '0' && c <= '9')
+         ziffern++;
+      else if(c == '.')
+         punkte++;
+      else
+         return false;
+   }
+   if(ziffern == 0 || punkte > 1)
+      return false;
+   w = StringToDouble(s);
+   return true;
+}
+
+double MinLotWert()
+{
+   double m = MarketInfo(Symbol(), MODE_MINLOT);
+   return (m > 0.0) ? m : 0.01;
+}
+
+// Höchster per Telegram erlaubter Lot-Deckel: FernMaxLotObergrenze, höchstens Broker-MaxLot
+double MaxLotGrenze()
+{
+   double g = FernMaxLotObergrenze;
+   double b = MarketInfo(Symbol(), MODE_MAXLOT);
+   if(b > 0.0 && b < g)
+      g = b;
+   return g;
+}
+
+int LotStellenAktuell()
+{
+   double step = MarketInfo(Symbol(), MODE_LOTSTEP);
+   return LotStellen((step > 0.0) ? step : 0.01);
+}
+
+string LotText(double lot)
+{
+   return DoubleToString(lot, LotStellenAktuell());
+}
+
+string LimitText(double proz)
+{
+   return (proz > 0.0) ? DoubleToString(proz, 1) + " %" : "aus";
+}
+
+string GeldText(double v)
+{
+   return ((v >= 0.0) ? "+" : "") + DoubleToString(v, 2) + " " + AccountCurrency();
+}
+
+string ModusName(ENUM_MODUS m)
+{
+   switch(m)
+   {
+      case MANUELLE_FREIGABE: return "Manuelle Freigabe";
+      case VOLLAUTOMATIK:     return "Vollautomatik";
+      case NUR_SIGNALE:       return "Nur Signale";
+   }
+   return "?";
+}
+
+// Name einer globalen Variable für Fern-Einstellungen (Konto + Magic)
+string FernSchluessel(string name)
+{
+   return "SSC_" + IntegerToString(AccountNumber()) + "_" + IntegerToString(MagicNumber) + "_" + name;
+}
+
+void FernSpeichern(string name, double wert)
+{
+   if(IsTesting())
+      return;
+   ResetLastError();
+   if(GlobalVariableSet(FernSchluessel(name), wert) == 0)
+      LogFehler("GlobalVariableSet " + name, GetLastError());
+}
+
+void FernLoeschen(string name)
+{
+   if(IsTesting())
+      return;
+   string k = FernSchluessel(name);
+   if(GlobalVariableCheck(k))
+      GlobalVariableDel(k);
+}
+
+void FernAlleLoeschen()
+{
+   FernLoeschen("risiko");
+   FernLoeschen("maxlot");
+   FernLoeschen("limit");
+   FernLoeschen("start");
+   FernLoeschen("ende");
+   FernLoeschen("impuls");
+   FernLoeschen("volumen");
+   FernLoeschen("ausbruch");
+   FernLoeschen("modus");
+   FernLoeschen("be");
+   FernLoeschen("trailing");
+   FernLoeschen("bericht");
+}
+
+bool FernLesen(string name, double &v)
+{
+   string k = FernSchluessel(name);
+   if(!GlobalVariableCheck(k))
+      return false;
+   v = GlobalVariableGet(k);
+   return true;
+}
+
+// Abweichung vom Input? (für "(fern geändert)")
+bool FernRisikoAbw()   { return MathAbs(g_risiko - RisikoProzent) > 1e-9; }
+bool FernMaxLotAbw()   { return MathAbs(g_maxLot - MaxLot) > 1e-9; }
+bool FernLimitAbw()    { return MathAbs(g_tagesLimitProz - TagesVerlustProzent) > 1e-9; }
+bool FernZeitAbw()     { return (g_startMin != ParseHHMM(HandelStart) || g_endeMin != ParseHHMM(HandelEnde)); }
+bool FernImpulsAbw()   { return MathAbs(g_impulsFaktor - ImpulsFaktor) > 1e-9; }
+bool FernVolumenAbw()  { return MathAbs(g_volumenFaktor - VolumenFaktor) > 1e-9; }
+bool FernAusbruchAbw() { return g_breakoutKerzen != BreakoutKerzen; }
+bool FernModusAbw()    { return g_modus != g_modusInput; }
+bool FernBeAbw()       { return g_beAktiv != BE_Aktiv; }
+bool FernTrailAbw()    { return g_trailingAktiv != TrailingAktiv; }
+
+// Tagesbericht-Uhrzeit laut Input in Minuten (-1 = aus/leer)
+int BerichtInputMin()
+{
+   string s = TagesberichtZeit;
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   return (s == "") ? -1 : ParseHHMM(s);
+}
+bool FernBerichtAbw()  { return g_berichtMin != BerichtInputMin(); }
+
+string FernMarke(bool abw)
+{
+   return abw ? " (fern geändert)" : "";
+}
+
+void ListeAnfuegen(string &liste, string eintrag)
+{
+   liste += ((liste == "") ? "" : ", ") + eintrag;
+}
+
+// Liste aller Werte, die vom Input abweichen ("" = keine)
+string FernAbweichungen()
+{
+   string r = "";
+   if(FernModusAbw())   ListeAnfuegen(r, "Modus " + ModusText());
+   if(FernRisikoAbw())  ListeAnfuegen(r, "Risiko " + DoubleToString(g_risiko, 1) + " %");
+   if(FernMaxLotAbw())  ListeAnfuegen(r, "MaxLot " + LotText(g_maxLot));
+   if(FernLimitAbw())   ListeAnfuegen(r, "Tageslimit " + LimitText(g_tagesLimitProz));
+   if(FernZeitAbw())    ListeAnfuegen(r, "Zeit " + MinutenText(g_startMin) + "-" + MinutenText(g_endeMin));
+   if(FernImpulsAbw())  ListeAnfuegen(r, "Körper " + DoubleToString(g_impulsFaktor, 2));
+   if(FernVolumenAbw()) ListeAnfuegen(r, "Volumen " + DoubleToString(g_volumenFaktor, 2));
+   if(FernAusbruchAbw()) ListeAnfuegen(r, "Ausbruch " + IntegerToString(g_breakoutKerzen));
+   if(FernBeAbw())      ListeAnfuegen(r, "Break-even " + (g_beAktiv ? "an" : "aus"));
+   if(FernTrailAbw())   ListeAnfuegen(r, "Trailing " + (g_trailingAktiv ? "an" : "aus"));
+   if(FernBerichtAbw()) ListeAnfuegen(r, "Bericht " + BerichtZeitText(g_berichtMin));
+   return r;
+}
+
+// Alle wirksamen Werte in einer Zeile (für /reset)
+string WerteText()
+{
+   return "Modus " + ModusText() + ", Risiko " + DoubleToString(g_risiko, 1) + " %, MaxLot " + LotText(g_maxLot)
+          + ", Tageslimit " + LimitText(g_tagesLimitProz) + ", Zeit " + MinutenText(g_startMin) + "-"
+          + MinutenText(g_endeMin) + ", Körper " + DoubleToString(g_impulsFaktor, 2) + ", Volumen "
+          + DoubleToString(g_volumenFaktor, 2) + ", Ausbruch " + IntegerToString(g_breakoutKerzen)
+          + ", Break-even " + (g_beAktiv ? "an" : "aus") + ", Trailing " + (g_trailingAktiv ? "an" : "aus")
+          + ", Bericht " + BerichtZeitText(g_berichtMin);
+}
+
+// Werte aus den Inputs setzen (Start und /reset); Modus nach Tester-Regel steht in g_modusInput
+void FernInputsUebernehmen()
+{
+   g_risiko         = RisikoProzent;
+   g_maxLot         = MaxLot;
+   g_tagesLimitProz = TagesVerlustProzent;
+   g_startMin       = ParseHHMM(HandelStart);
+   g_endeMin        = ParseHHMM(HandelEnde);
+   g_impulsFaktor   = ImpulsFaktor;
+   g_volumenFaktor  = VolumenFaktor;
+   g_breakoutKerzen = BreakoutKerzen;
+   g_beAktiv        = BE_Aktiv;
+   g_trailingAktiv  = TrailingAktiv;
+   g_berichtMin     = BerichtInputMin();
+   g_modus          = g_modusInput;
+}
+
+// Gespeicherte Fern-Einstellungen laden (nur live). Ungültige Werte werden ignoriert -> Input gilt.
+void FernLaden()
+{
+   g_fernInfo = "";
+   if(IsTesting())
+      return;
+   double v = 0.0, v2 = 0.0;
+
+   if(FernLesen("risiko", v))
+   {
+      if(v >= 0.1 - 1e-9 && v <= 25.0 + 1e-9) g_risiko = v;
+      else Print("ScalpScout: gespeicherter Wert 'risiko' ungültig - Input gilt.");
+   }
+   if(FernLesen("maxlot", v))
+   {
+      if(v >= MinLotWert() - 1e-9 && v <= MaxLotGrenze() + 1e-9) g_maxLot = LotAbrunden(v);
+      else Print("ScalpScout: gespeicherter Wert 'maxlot' ungültig - Input gilt.");
+   }
+   if(FernLesen("limit", v))
+   {
+      if(v < 1e-9 || (v >= 1.0 - 1e-9 && v <= 100.0 + 1e-9)) g_tagesLimitProz = (v < 1e-9) ? 0.0 : v;
+      else Print("ScalpScout: gespeicherter Wert 'limit' ungültig - Input gilt.");
+   }
+   if(FernLesen("start", v) && FernLesen("ende", v2))
+   {
+      if(v >= 0 && v <= 1439 && v2 >= 0 && v2 <= 1439)
+      {
+         g_startMin = (int)MathRound(v);
+         g_endeMin  = (int)MathRound(v2);
+      }
+      else Print("ScalpScout: gespeichertes Handelsfenster ungültig - Input gilt.");
+   }
+   if(FernLesen("impuls", v))
+   {
+      if(v >= 0.5 - 1e-9 && v <= 4.0 + 1e-9) g_impulsFaktor = v;
+      else Print("ScalpScout: gespeicherter Wert 'impuls' ungültig - Input gilt.");
+   }
+   if(FernLesen("volumen", v))
+   {
+      if(v >= 0.8 - 1e-9 && v <= 4.0 + 1e-9) g_volumenFaktor = v;
+      else Print("ScalpScout: gespeicherter Wert 'volumen' ungültig - Input gilt.");
+   }
+   if(FernLesen("ausbruch", v))
+   {
+      if(v >= 2.0 - 1e-9 && v <= 50.0 + 1e-9) g_breakoutKerzen = (int)MathRound(v);
+      else Print("ScalpScout: gespeicherter Wert 'ausbruch' ungültig - Input gilt.");
+   }
+   if(FernLesen("be", v))
+      g_beAktiv = (v > 0.5);
+   if(FernLesen("trailing", v))
+      g_trailingAktiv = (v > 0.5);
+   if(FernLesen("bericht", v))
+   {
+      if(v >= -1.0 - 1e-9 && v <= 1439.0 + 1e-9) g_berichtMin = (int)MathRound(v);
+      else Print("ScalpScout: gespeicherter Wert 'bericht' ungültig - Input gilt.");
+   }
+   if(FernLesen("berichttag", v))        // kein Einstellwert: Tag des zuletzt gesendeten Berichts
+      g_berichtTag = (datetime)(long)v;
+   // Vollautomatik wird nie gespeichert: nach einem Neustart gilt dann der Input
+   if(FernLesen("modus", v))
+   {
+      if(MathAbs(v - (double)MANUELLE_FREIGABE) < 0.5)      g_modus = MANUELLE_FREIGABE;
+      else if(MathAbs(v - (double)NUR_SIGNALE) < 0.5)       g_modus = NUR_SIGNALE;
+      else Print("ScalpScout: gespeicherter Wert 'modus' ungültig - Input gilt.");
+   }
+
+   g_fernInfo = FernAbweichungen();
+   if(g_fernInfo != "")
+      Print("ScalpScout: Fern-Einstellungen aktiv: ", g_fernInfo);
+}
+
+// Betriebsart wechseln (sofort wirksam) und merken. Vollautomatik wird nie gespeichert.
+void ModusSetzen(ENUM_MODUS neu)
+{
+   g_modus = neu;
+   if(neu != MANUELLE_FREIGABE && g_sig.aktiv)
+      SignalVerwerfen("Moduswechsel", "⌛ verworfen (Moduswechsel)");
+   if(neu == g_modusInput || neu == VOLLAUTOMATIK)
+      FernLoeschen("modus");
+   else
+      FernSpeichern("modus", (double)neu);
+   HinweisSetzen("Modus: " + ModusText() + " (Telegram)");
+}
+
+//+------------------------------------------------------------------+
+//| Diagnose der letzten ausgewerteten M1-Kerze                      |
+//+------------------------------------------------------------------+
+void DiagZuruecksetzen()
+{
+   g_dgGueltig        = false;
+   g_dgSignalMoeglich = false;
+   g_dgZeit           = 0;
+   g_dgErgebnis       = "";
+   g_dgFilter         = "";
+   g_dgKerzen         = 0;
+   g_dgSignale        = 0;
+   g_dgTrades         = 0;
+   g_dgVerworfen      = 0;
+   g_dgGrundAnz       = 0;
+}
+
+// Grund ohne wechselnde Zahlen, damit gleiche Gründe zusammengezählt werden
+string GrundKurz(string grund)
+{
+   if(StringFind(grund, "Lot ") == 0)
+      return "Lot unter MinLot (Risiko zu klein)";
+   if(StringFind(grund, "MaxLot-Deckel") == 0)
+      return "MaxLot unter MinLot";
+   if(StringFind(grund, "Nicht genug freie Margin") == 0)
+      return "Nicht genug freie Margin";
+   int p = StringFind(grund, " (");
+   if(p > 0)
+      grund = StringSubstr(grund, 0, p);
+   return grund;
+}
+
+// Ein erkanntes Signal wurde nicht gehandelt: zählen und Grund merken
+void DiagVerworfen(string grund)
+{
+   g_dgVerworfen++;
+   string k = GrundKurz(grund);
+   for(int i = 0; i < g_dgGrundAnz; i++)
+   {
+      if(g_dgGrund[i] == k)
+      {
+         g_dgGrundN[i]++;
+         return;
+      }
+   }
+   if(g_dgGrundAnz < 20)
+   {
+      g_dgGrund[g_dgGrundAnz]  = k;
+      g_dgGrundN[g_dgGrundAnz] = 1;
+      g_dgGrundAnz++;
+   }
+}
+
+// Rein lesend: bewertet die zuletzt geschlossene M1-Kerze in beiden Richtungen (gleiche Regeln wie
+// SignalErkennen, aber ohne vorzeitigen Abbruch) und merkt die Werte für /diag und die Chart-Zeile.
+void DiagKerze()
+{
+   g_dgGueltig        = false;
+   g_dgSignalMoeglich = false;
+   g_dgFilter         = "";
+   g_dgErgebnis       = "";
+   g_dgZeit           = iTime(Symbol(), PERIOD_M1, 1);
+
+   int mindestens = MathMax(MathMax(ATR_Periode, EMA_Periode * 2), VolumenKerzen + g_breakoutKerzen) + 5;
+   if(iBars(Symbol(), PERIOD_M1) < mindestens)
+   {
+      g_dgErgebnis = "kein Signal: zu wenig M1-Kerzen im Chart (" + IntegerToString(mindestens) + " nötig)";
+      return;
+   }
+   double atr = AktuelleATR();
+   if(atr <= 0.0)
+   {
+      g_dgErgebnis = "kein Signal: ATR nicht verfügbar";
+      return;
+   }
+   g_dgAtr = atr;
+
+   double o1      = iOpen(Symbol(), PERIOD_M1, 1);
+   double c1      = iClose(Symbol(), PERIOD_M1, 1);
+   double koerper = MathAbs(c1 - o1);
+   g_dgKoerperX  = koerper / atr;
+   g_dgKoerperOK = (koerper > g_impulsFaktor * atr);
+
+   double summe = 0.0;
+   for(int i = 2; i <= VolumenKerzen + 1; i++)
+      summe += (double)iVolume(Symbol(), PERIOD_M1, i);
+   double schnitt = (VolumenKerzen > 0) ? summe / VolumenKerzen : 0.0;
+   double vol1    = (double)iVolume(Symbol(), PERIOD_M1, 1);
+   g_dgVolX  = (schnitt > 0.0) ? vol1 / schnitt : 0.0;
+   g_dgVolOK = (schnitt > 0.0 && vol1 > g_volumenFaktor * schnitt);
+
+   double ema = iMA(Symbol(), PERIOD_M1, EMA_Periode, 0, MODE_EMA, PRICE_CLOSE, 1);
+   int hi = iHighest(Symbol(), PERIOD_M1, MODE_HIGH, g_breakoutKerzen, 2);
+   int lo = iLowest(Symbol(), PERIOD_M1, MODE_LOW, g_breakoutKerzen, 2);
+   bool farbeL = (c1 > o1);
+   bool farbeS = (c1 < o1);
+   bool ausL   = (hi >= 0 && c1 > iHigh(Symbol(), PERIOD_M1, hi));
+   bool ausS   = (lo >= 0 && c1 < iLow(Symbol(), PERIOD_M1, lo));
+   bool trL    = (!TrendFilterAktiv || c1 > ema);
+   bool trS    = (!TrendFilterAktiv || c1 < ema);
+   int  pktL   = (farbeL ? 1 : 0) + (ausL ? 1 : 0) + (trL ? 1 : 0);
+   int  pktS   = (farbeS ? 1 : 0) + (ausS ? 1 : 0) + (trS ? 1 : 0);
+
+   // die Richtung zeigen, die weniger weit vom Signal entfernt ist (bei Gleichstand die Kerzenfarbe)
+   int r = 1;
+   if(pktS > pktL || (pktS == pktL && farbeS))
+      r = -1;
+   g_dgRichtung   = r;
+   g_dgFarbeOK    = (r > 0) ? farbeL : farbeS;
+   g_dgAusbruchOK = (r > 0) ? ausL : ausS;
+   g_dgTrendOK    = (r > 0) ? trL : trS;
+
+   g_dgKostenIst = SpreadPunkte() + KommissionPunkte();
+   g_dgKostenMax = MaxSpreadAktuell(atr);
+   g_dgKostenOK  = (g_dgKostenIst <= g_dgKostenMax);
+
+   string grund = "";
+   g_dgFilter = HandelErlaubt(grund, atr) ? "alle frei" : grund;
+
+   string txt = (r > 0) ? "LONG" : "SHORT";
+   g_dgSignalMoeglich = (g_dgKoerperOK && g_dgVolOK && g_dgFarbeOK && g_dgAusbruchOK && g_dgTrendOK);
+   if(!g_dgKoerperOK)
+      g_dgErgebnis = "kein Signal: Kerzenkörper zu klein";
+   else if(!g_dgVolOK)
+      g_dgErgebnis = "kein Signal: Volumen zu klein";
+   else if(!g_dgFarbeOK)
+      g_dgErgebnis = "kein Signal: Kerze läuft nicht in Richtung " + txt;
+   else if(!g_dgAusbruchOK)
+      g_dgErgebnis = "kein Signal: kein Ausbruch (" + txt + ")";
+   else if(!g_dgTrendOK)
+      g_dgErgebnis = "kein Signal: Trendfilter/EMA (" + txt + ")";
+   g_dgGueltig = true;
+}
+
+// Chart-Zeile "Letzte Kerze: Körper 1.1/1.8 ✗ | Vol 1.6/1.5 ✓ | Ausbr ✗ | Trend ✓"
+string DiagInfoText(color &clr)
+{
+   if(!g_dgGueltig)
+   {
+      clr = clrSilver;
+      return (g_dgZeit == 0) ? "Letzte Kerze: noch nicht ausgewertet" : "Letzte Kerze: " + g_dgErgebnis;
+   }
+   clr = g_dgSignalMoeglich ? clrLime : clrSilver;
+   return "Letzte Kerze: Körper " + DoubleToString(g_dgKoerperX, 1) + "/" + DoubleToString(g_impulsFaktor, 1)
+          + " " + HaekchenText(g_dgKoerperOK)
+          + " | Vol " + DoubleToString(g_dgVolX, 1) + "/" + DoubleToString(g_volumenFaktor, 1)
+          + " " + HaekchenText(g_dgVolOK)
+          + " | Ausbr " + HaekchenText(g_dgAusbruchOK)
+          + " | Trend " + HaekchenText(g_dgTrendOK);
+}
+
+//+------------------------------------------------------------------+
 //| Tages- und Verlustverwaltung                                     |
 //+------------------------------------------------------------------+
 void TagSpeichern()
@@ -324,10 +853,10 @@ void TagPruefen()
       Print("ScalpScout: neuer Handelstag, Start-Equity ", DoubleToString(g_tagEquity, 2));
    }
    // Tageslimit einrasten (gilt bis zum nächsten Tag)
-   if(!g_tagesLimit && TagesVerlustProzent > 0.0 && g_tagEquity > 0.0)
+   if(!g_tagesLimit && g_tagesLimitProz > 0.0 && g_tagEquity > 0.0)
    {
       double verlustProz = (g_tagEquity - AccountEquity()) / g_tagEquity * 100.0;
-      if(verlustProz >= TagesVerlustProzent)
+      if(verlustProz >= g_tagesLimitProz)
       {
          g_tagesLimit = true;
          Print("ScalpScout: Tagesverlust-Limit erreicht (", DoubleToString(verlustProz, 2),
@@ -409,14 +938,15 @@ bool ZeitfensterOK()
 }
 
 // Prüft alle Schutzfilter. true = Handel erlaubt, sonst Grund in 'grund'
-bool HandelErlaubt(string &grund, double atr)
+// manuell = Hand-Trade per Telegram: Zeitfenster und Spread-Limit werden ignoriert
+bool HandelErlaubt(string &grund, double atr, bool manuell = false)
 {
    grund = "";
    VerlustSerieAktualisieren();
 
    if(g_gestoppt)
    {
-      grund = "Gestoppt (Kill-Switch) - EA neu starten";
+      grund = "Gestoppt (Kill-Switch) - per Telegram /start oder EA neu starten";
       return false;
    }
    if(g_tgPause)
@@ -424,14 +954,14 @@ bool HandelErlaubt(string &grund, double atr)
       grund = "Pausiert per Telegram (/start hebt auf)";
       return false;
    }
-   if(g_modus != NUR_SIGNALE && !IsTesting() && (!IsTradeAllowed() || !IsExpertEnabled()))
+   if((g_modus != NUR_SIGNALE || manuell) && !IsTesting() && (!IsTradeAllowed() || !IsExpertEnabled()))
    {
       grund = "Algo-Trading/AutoTrading ist aus";
       return false;
    }
-   if(!ZeitfensterOK())
+   if(!manuell && !ZeitfensterOK())
    {
-      grund = "Außerhalb Handelszeit (" + HandelStart + "-" + HandelEnde + ")";
+      grund = "Außerhalb Handelszeit (" + MinutenText(g_startMin) + "-" + MinutenText(g_endeMin) + ")";
       return false;
    }
    if(g_tagesLimit)
@@ -458,7 +988,7 @@ bool HandelErlaubt(string &grund, double atr)
    double sp     = SpreadPunkte();
    double ko     = KommissionPunkte();
    double kosten = sp + ko;
-   if(kosten > maxSp)
+   if(!manuell && kosten > maxSp)
    {
       grund = "Kosten zu hoch (" + KostenText(sp, ko) + " > " + DoubleToString(maxSp, 1) + " Pkt)";
       return false;
@@ -469,7 +999,8 @@ bool HandelErlaubt(string &grund, double atr)
 //+------------------------------------------------------------------+
 //| Plan berechnen: Preise, SL/TP, Lot                               |
 //+------------------------------------------------------------------+
-bool BerechnePlan(int richtung, double atr, Plan &p, string &grund)
+// lotVorgabe > 0: feste Lotgröße statt Risiko-Berechnung (Hand-Trade, Deckel = FernMaxLotObergrenze)
+bool BerechnePlan(int richtung, double atr, Plan &p, string &grund, double lotVorgabe = 0.0)
 {
    grund = "";
    RefreshRates();
@@ -522,29 +1053,31 @@ bool BerechnePlan(int richtung, double atr, Plan &p, string &grund)
       grund = "Symbol-Daten (TickValue/TickSize/MinLot) fehlen";
       return false;
    }
-   double risikoGeld   = AccountEquity() * RisikoProzent / 100.0;
+   double risikoGeld   = AccountEquity() * g_risiko / 100.0;
    double verlustProLot = p.slDist / tickSize * tickValue + KommissionProLot;   // SL-Verlust + Kommission
    if(verlustProLot <= 0.0)
    {
       grund = "Verlust pro Lot ungültig";
       return false;
    }
-   double lotRoh = risikoGeld / verlustProLot;
+   double lotRoh = (lotVorgabe > 0.0) ? lotVorgabe : risikoGeld / verlustProLot;
    double lot    = LotAbrunden(lotRoh);
 
    if(lot < minLot - 1e-9)
    {
       grund = "Lot " + DoubleToString(lotRoh, 4) + " < MinLot " + DoubleToString(minLot, 2)
-              + ": Risiko " + DoubleToString(RisikoProzent, 1) + " % zu klein, kein Trade";
+              + ": Risiko " + DoubleToString(g_risiko, 1) + " % zu klein, kein Trade";
       return false;
    }
-   if(lot > MaxLot)
-      lot = LotAbrunden(MaxLot);
+   if(lotVorgabe <= 0.0 && lot > g_maxLot)
+      lot = LotAbrunden(g_maxLot);
+   if(lotVorgabe > 0.0 && lot > FernMaxLotObergrenze)
+      lot = LotAbrunden(FernMaxLotObergrenze);
    if(maxLotBr > 0.0 && lot > maxLotBr)
       lot = LotAbrunden(maxLotBr);
    if(lot < minLot - 1e-9)
    {
-      grund = "MaxLot-Deckel (" + DoubleToString(MaxLot, 2) + ") < MinLot " + DoubleToString(minLot, 2)
+      grund = "MaxLot-Deckel (" + DoubleToString(g_maxLot, 2) + ") < MinLot " + DoubleToString(minLot, 2)
               + ", kein Trade";
       return false;
    }
@@ -567,7 +1100,7 @@ bool BerechnePlan(int richtung, double atr, Plan &p, string &grund)
 //+------------------------------------------------------------------+
 //| Order senden (mit Retry bei Requote)                             |
 //+------------------------------------------------------------------+
-bool OrderOeffnen(int richtung, double atr, string &grund)
+bool OrderOeffnen(int richtung, double atr, string &grund, double lotVorgabe = 0.0)
 {
    int   cmd  = (richtung > 0) ? OP_BUY : OP_SELL;
    color clr  = (richtung > 0) ? clrLime : clrRed;
@@ -589,7 +1122,7 @@ bool OrderOeffnen(int richtung, double atr, string &grund)
 
       // Bei jedem Versuch frische Preise, SL/TP relativ zum aktuellen Preis
       Plan p;
-      if(!BerechnePlan(richtung, atr, p, grund))
+      if(!BerechnePlan(richtung, atr, p, grund, lotVorgabe))
          return false;
 
       ResetLastError();
@@ -602,6 +1135,7 @@ bool OrderOeffnen(int richtung, double atr, string &grund)
                " SL ", DoubleToString(p.sl, Digits), " TP ", DoubleToString(p.tp, Digits),
                " (Versuch ", v, ")");
          g_orderTicket = ticket;
+         g_dgTrades++;
          g_orderPreis  = p.preis;
          if(OrderSelect(ticket, SELECT_BY_TICKET))
             g_orderPreis = OrderOpenPrice();
@@ -628,7 +1162,7 @@ bool OrderOeffnen(int richtung, double atr, string &grund)
 //+------------------------------------------------------------------+
 void PositionenVerwalten()
 {
-   if(!BE_Aktiv && !TrailingAktiv)
+   if(!g_beAktiv && !g_trailingAktiv)
       return;
    double atr = AktuelleATR();
    if(atr <= 0.0)
@@ -653,13 +1187,13 @@ void PositionenVerwalten()
       if(typ == OP_BUY)
       {
          double gewinn = Bid - offen;
-         if(BE_Aktiv && gewinn >= BE_ATR * atr)
+         if(g_beAktiv && gewinn >= BE_ATR * atr)
          {
             double be = NormalizeDouble(offen + BE_PufferPunkte * Point, Digits);
             if(sl == 0.0 || be > sl + Point / 2.0)
                neu = be;
          }
-         if(TrailingAktiv && gewinn >= TrailingStartATR * atr)
+         if(g_trailingAktiv && gewinn >= TrailingStartATR * atr)
          {
             double t = NormalizeDouble(Bid - TrailingATR * atr, Digits);
             if(neu == 0.0 || t > neu + TrailingSchrittATR * atr)
@@ -671,13 +1205,13 @@ void PositionenVerwalten()
       else
       {
          double gewinn = offen - Ask;
-         if(BE_Aktiv && gewinn >= BE_ATR * atr)
+         if(g_beAktiv && gewinn >= BE_ATR * atr)
          {
             double be = NormalizeDouble(offen - BE_PufferPunkte * Point, Digits);
             if(sl == 0.0 || be < sl - Point / 2.0)
                neu = be;
          }
-         if(TrailingAktiv && gewinn >= TrailingStartATR * atr)
+         if(g_trailingAktiv && gewinn >= TrailingStartATR * atr)
          {
             double t = NormalizeDouble(Ask + TrailingATR * atr, Digits);
             if(neu == 0.0 || t < neu - TrailingSchrittATR * atr)
@@ -705,9 +1239,11 @@ void PositionenVerwalten()
 //+------------------------------------------------------------------+
 //| Kill-Switch: alle eigenen Positionen auf diesem Symbol schließen |
 //+------------------------------------------------------------------+
-void AlleSchliessen()
+// Rückgabe über geschlossen/fehler; die Bestätigung (MessageBox bzw. Telegram-Knopf) liegt beim Aufrufer
+void AlleSchliessen(int &geschlossen, int &fehler)
 {
-   int geschlossen = 0, fehler = 0;
+   geschlossen = 0;
+   fehler = 0;
    int slip = SlippagePunkte();
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
@@ -809,13 +1345,7 @@ void KnopfSetzen(string name, int x, int y, int b, int h, string text, color bg,
 
 string ModusText()
 {
-   switch(g_modus)
-   {
-      case MANUELLE_FREIGABE: return "Manuelle Freigabe";
-      case VOLLAUTOMATIK:     return "Vollautomatik";
-      case NUR_SIGNALE:       return "Nur Signale";
-   }
-   return "?";
+   return ModusName(g_modus);
 }
 
 //+------------------------------------------------------------------+
@@ -851,26 +1381,31 @@ void UiAktualisieren()
    bool   frei   = HandelErlaubt(grund, atr);
 
    InfoZeile(0, "ScalpScout | " + Symbol() + " | Magic " + IntegerToString(MagicNumber), clrWhite);
-   InfoZeile(1, "Modus: " + ModusText() + (IsTesting() ? " (Tester)" : ""), clrWhite);
+   InfoZeile(1, "Modus: " + ModusText() + (IsTesting() ? " (Tester)" : "") + " | Risiko "
+                + DoubleToString(g_risiko, 1) + " % | MaxLot " + LotText(g_maxLot),
+             (FernModusAbw() || FernRisikoAbw() || FernMaxLotAbw()) ? clrGold : clrWhite);
    InfoZeile(2, "Kosten: " + KostenText(sp, ko) + " / max " + DoubleToString(maxSp, 1) + " Pkt",
              (sp + ko > maxSp) ? clrOrangeRed : clrLime);
    InfoZeile(3, "ATR(" + IntegerToString(ATR_Periode) + ", M1): " + DoubleToString(atr, Digits)
                 + " (" + DoubleToString(atr / Point, 0) + " Pkt)", clrWhite);
    InfoZeile(4, "Serverzeit: " + TimeToString(TimeCurrent(), TIME_MINUTES)
-                + " (Handel " + HandelStart + "-" + HandelEnde + ")",
+                + " (Handel " + MinutenText(g_startMin) + "-" + MinutenText(g_endeMin) + ")",
              ZeitfensterOK() ? clrLime : clrOrange);
    InfoZeile(5, "Tagesergebnis: " + DoubleToString(diff, 2) + " " + AccountCurrency()
                 + " (" + DoubleToString(proz, 2) + " %)", (diff >= 0.0) ? clrLime : clrOrangeRed);
-   InfoZeile(6, g_tagesLimit ? "Verlustlimit: ERREICHT (" + DoubleToString(TagesVerlustProzent, 1) + " %)"
-                             : "Verlustlimit: ok (max " + DoubleToString(TagesVerlustProzent, 1) + " %)",
+   InfoZeile(6, g_tagesLimit ? "Verlustlimit: ERREICHT (" + LimitText(g_tagesLimitProz) + ")"
+                             : "Verlustlimit: ok (max " + LimitText(g_tagesLimitProz) + ")",
              g_tagesLimit ? clrOrangeRed : clrLime);
    InfoZeile(7, frei ? "Status: bereit" : "Blockiert: " + grund, frei ? clrLime : clrOrange);
    color tgFarbe = clrSilver;
    string tgText = TgInfoText(tgFarbe);
    InfoZeile(8, tgText, tgFarbe);
+   color dgFarbe = clrSilver;
+   string dgText = DiagInfoText(dgFarbe);
+   InfoZeile(9, dgText, dgFarbe);
    string h = (g_hinweis == "") ? "Hinweis: -" :
               "Hinweis (" + TimeToString(g_hinweisZeit, TIME_MINUTES) + "): " + g_hinweis;
-   InfoZeile(9, h, (g_hinweis == "") ? clrSilver : clrGold);
+   InfoZeile(10, h, (g_hinweis == "") ? clrSilver : clrGold);
 }
 
 //+------------------------------------------------------------------+
@@ -892,7 +1427,7 @@ string PanelZeileText(int i)
       case 2: return "Stop-Loss: " + DoubleToString(p.sl, Digits) + "  (" + DoubleToString(p.slDist / Point, 0) + " Pkt)";
       case 3: return "Take-Profit: " + DoubleToString(p.tp, Digits) + "  (" + DoubleToString(p.tpDist / Point, 0) + " Pkt)";
       case 4: return "Lot: " + DoubleToString(p.lot, LotStellen(MarketInfo(Symbol(), MODE_LOTSTEP)))
-                     + "  | Risiko " + DoubleToString(RisikoProzent, 1) + " %";
+                     + "  | Risiko " + DoubleToString(g_risiko, 1) + " %";
       case 5: return "Kosten: " + KostenText(p.spreadPkt, p.kommPkt) + " Pkt | CRV 1:" + DoubleToString(p.crv, 2);
       case 6:
       {
@@ -934,7 +1469,10 @@ void SignalVerwerfen(string grund, string tgText = "")
 {
    bool war = g_sig.aktiv;
    if(war)
+   {
       Print("ScalpScout: Signal verworfen - ", grund);
+      DiagVerworfen(grund);
+   }
    g_sig.aktiv = false;
    PanelLoeschen();
    if(war && tgText != "" && g_sigMsgId > 0)
@@ -993,11 +1531,13 @@ bool SignalAusfuehren(bool perTelegram, string &ergebnis)
    if(!HandelErlaubt(grund, atr))
    {
       HinweisSetzen("Nicht ausgeführt: " + grund);
+      DiagVerworfen(grund);
       ergebnis = grund;
    }
    else if(!OrderOeffnen(richtung, atr, grund))
    {
       HinweisSetzen("Order fehlgeschlagen: " + grund);
+      DiagVerworfen(grund);
       ergebnis = grund;
    }
    else
@@ -1315,14 +1855,29 @@ string TgStatusText()
    string grund = "";
    bool   frei  = HandelErlaubt(grund, atr);
    string status = frei ? "Status: bereit" : "Blockiert: " + HtmlEscape(grund);
-   return "<b>ScalpScout " + HtmlEscape(Symbol()) + "</b>\n"
-        + "Modus: " + ModusText() + "\n"
+   return "<b>ScalpScout " + HtmlEscape(Symbol()) + "</b> (Magic " + IntegerToString(MagicNumber) + ")\n"
+        + "Modus: " + ModusText() + FernMarke(FernModusAbw()) + "\n"
+        + "Risiko: " + DoubleToString(g_risiko, 1) + " %" + FernMarke(FernRisikoAbw()) + "\n"
+        + "MaxLot: " + LotText(g_maxLot) + FernMarke(FernMaxLotAbw()) + " (Obergrenze " + LotText(FernMaxLotObergrenze) + ")\n"
+        + "Tageslimit: " + LimitText(g_tagesLimitProz) + FernMarke(FernLimitAbw()) + "\n"
+        + "Handelsfenster: " + MinutenText(g_startMin) + "-" + MinutenText(g_endeMin) + " Serverzeit"
+        + FernMarke(FernZeitAbw()) + "\n"
+        + "Signal: Körper &gt; " + DoubleToString(g_impulsFaktor, 2) + "×ATR" + FernMarke(FernImpulsAbw()) + "\n"
+        + "Signal: Volumen &gt; " + DoubleToString(g_volumenFaktor, 2) + "×Ø" + FernMarke(FernVolumenAbw()) + "\n"
+        + "Signal: Ausbruch über " + IntegerToString(g_breakoutKerzen) + " Kerzen" + FernMarke(FernAusbruchAbw())
+        + ", Trendfilter " + (TrendFilterAktiv ? "an (EMA " + IntegerToString(EMA_Periode) + ")" : "aus") + "\n"
+        + "Break-even: " + (g_beAktiv ? "an" : "aus") + FernMarke(FernBeAbw()) + ", Trailing: "
+        + (g_trailingAktiv ? "an" : "aus") + FernMarke(FernTrailAbw()) + "\n"
+        + "Tagesbericht: " + BerichtZeitText(g_berichtMin) + FernMarke(FernBerichtAbw()) + "\n"
+        + "Konto: Kontostand " + DoubleToString(AccountBalance(), 2) + ", Equity " + DoubleToString(AccountEquity(), 2)
+        + ", freie Margin " + DoubleToString(AccountFreeMargin(), 2) + " " + AccountCurrency() + "\n"
         + "Kosten: " + KostenText(sp, ko) + " / max " + DoubleToString(maxSp, 1) + " Pkt\n"
         + "Tagesergebnis: " + DoubleToString(diff, 2) + " " + AccountCurrency() + " (" + DoubleToString(proz, 2) + " %)\n"
         + "Offene Positionen: " + IntegerToString(ZaehlePositionen()) + " ("
         + DoubleToString(OffenerGewinn(), 2) + " " + AccountCurrency() + ")\n"
         + status;
 }
+
 
 // Text für die Info-Zeile "Telegram: ..."
 string TgInfoText(color &clr)
@@ -1356,27 +1911,999 @@ string TgInfoText(color &clr)
    return t;
 }
 
-// Textbefehle aus dem Chat: /status, /stop, /start
+// Befehlsübersicht mit aktuellen Werten
+string TgHilfeText()
+{
+   return "<b>ScalpScout Befehle</b> (" + HtmlEscape(Symbol()) + ", Magic " + IntegerToString(MagicNumber) + ")\n"
+        + "/status - Zustand, Konto und alle Einstellungen\n"
+        + "/diag - Auswertung der letzten Kerze und Zähler seit Start\n"
+        + "/modus manuell|signale|auto - Betriebsart, jetzt: " + ModusText()
+        + " (auto nur nach Bestätigung per Knopf)\n"
+        + "/risiko X - Risiko je Trade in % (0.1-25), jetzt " + DoubleToString(g_risiko, 1) + "\n"
+        + "/maxlot X - Lot-Deckel (" + LotText(MinLotWert()) + " bis " + LotText(MaxLotGrenze()) + "), jetzt "
+        + LotText(g_maxLot) + "\n"
+        + "/limit X|aus - Tagesverlust-Limit in % (1-100), jetzt " + LimitText(g_tagesLimitProz) + "\n"
+        + "/zeit HH:MM-HH:MM - Handelsfenster in Serverzeit, jetzt " + MinutenText(g_startMin) + "-"
+        + MinutenText(g_endeMin) + "\n"
+        + "/koerper X - Kerzenkörper-Faktor (0.5-4.0), jetzt " + DoubleToString(g_impulsFaktor, 2) + "\n"
+        + "/volumen X - Volumen-Faktor (0.8-4.0), jetzt " + DoubleToString(g_volumenFaktor, 2) + "\n"
+        + "/ausbruch N - Ausbruch über N Kerzen (2-50), jetzt " + IntegerToString(g_breakoutKerzen) + "\n"
+        + "/be an|aus - Break-even, jetzt " + (g_beAktiv ? "an" : "aus") + "\n"
+        + "/trailing an|aus - Trailing-Stop, jetzt " + (g_trailingAktiv ? "an" : "aus") + "\n"
+        + "/bericht [HH:MM|aus] - Tagesbericht sofort bzw. Uhrzeit setzen, jetzt " + BerichtZeitText(g_berichtMin) + "\n"
+        + "/kauf [lot] und /verkauf [lot] - Hand-Trade mit Vorschau und Bestätigung (30 s)\n"
+        + "/zu ticket - eine Position schließen (mit Bestätigung)\n"
+        + "/sl ticket preis|be und /tp ticket preis - Stop-Loss bzw. Take-Profit ändern\n"
+        + "/positionen - offene Positionen\n"
+        + "/heute - heute geschlossene Trades\n"
+        + "/schliessen - alle Positionen schließen (mit Bestätigung)\n"
+        + "/stop und /start - Signale pausieren bzw. freigeben (/start löst auch die Kill-Switch-Sperre, mit Bestätigung)\n"
+        + "/reset - Fern-Einstellungen löschen, Inputs gelten wieder\n"
+        + "Dezimaltrenner: Komma oder Punkt.";
+}
+
+// Ergebnis der letzten Kerzen-Auswertung und Zähler seit Start
+string TgDiagText()
+{
+   string s = "<b>Diagnose " + HtmlEscape(Symbol()) + "</b>\n";
+   if(g_dgZeit == 0)
+      s += "Noch keine Kerze ausgewertet - die erste Auswertung kommt mit der nächsten neuen M1-Kerze.\n";
+   else if(!g_dgGueltig)
+      s += "Kerze " + TimeToString(g_dgZeit, TIME_DATE | TIME_MINUTES) + " (Serverzeit)\n" + HtmlEscape(g_dgErgebnis) + "\n";
+   else
+   {
+      string r = (g_dgRichtung > 0) ? "LONG" : "SHORT";
+      s += "Kerze " + TimeToString(g_dgZeit, TIME_DATE | TIME_MINUTES) + " (Serverzeit), Richtung geprüft: " + r + "\n"
+         + "Körper: " + DoubleToString(g_dgKoerperX, 2) + "×ATR (Soll &gt; " + DoubleToString(g_impulsFaktor, 2) + ") "
+         + HaekchenText(g_dgKoerperOK) + "\n"
+         + "Volumen: " + DoubleToString(g_dgVolX, 2) + "×Ø (Soll &gt; " + DoubleToString(g_volumenFaktor, 2) + ") "
+         + HaekchenText(g_dgVolOK) + "\n"
+         + "Kerze in Richtung " + r + ": " + HaekchenText(g_dgFarbeOK) + "\n"
+         + "Ausbruch (" + IntegerToString(g_breakoutKerzen) + " Kerzen): " + HaekchenText(g_dgAusbruchOK) + "\n"
+         + "Trend/EMA: " + (TrendFilterAktiv ? HaekchenText(g_dgTrendOK) : "✓ (Filter aus)") + "\n"
+         + "Kosten: " + DoubleToString(g_dgKostenIst, 1) + " / max " + DoubleToString(g_dgKostenMax, 1) + " Pkt "
+         + HaekchenText(g_dgKostenOK) + "\n"
+         + "Filter: " + HtmlEscape(g_dgFilter) + "\n";
+   }
+   if(g_dgErgebnis != "" && g_dgGueltig)
+      s += "<b>Ergebnis: " + HtmlEscape(g_dgErgebnis) + "</b>\n";
+   s += "Seit Start: " + IntegerToString(g_dgKerzen) + " Kerzen, " + IntegerToString(g_dgSignale) + " Signale, "
+      + IntegerToString(g_dgTrades) + " Trades, " + IntegerToString(g_dgVerworfen) + " verworfen";
+   int best = -1;
+   for(int i = 0; i < g_dgGrundAnz; i++)
+   {
+      if(best < 0 || g_dgGrundN[i] > g_dgGrundN[best])
+         best = i;
+   }
+   if(best >= 0)
+      s += "\nHäufigster Grund: " + HtmlEscape(g_dgGrund[best]) + " (" + IntegerToString(g_dgGrundN[best]) + "×)";
+   return s;
+}
+
+// Offene eigene Positionen (Symbol + Magic)
+string TgPositionenText()
+{
+   string zeilen = "";
+   int    n      = 0;
+   double summe  = 0.0;
+   for(int i = 0; i < OrdersTotal(); i++)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+      if(OrderSymbol() != Symbol() || OrderMagicNumber() != MagicNumber || OrderType() > OP_SELL)
+         continue;
+      double gw = OrderProfit() + OrderSwap() + OrderCommission();
+      summe += gw;
+      n++;
+      if(n <= 25)
+         zeilen += "#" + IntegerToString(OrderTicket()) + " " + (OrderType() == OP_BUY ? "BUY " : "SELL ")
+                   + LotText(OrderLots()) + " @" + DoubleToString(OrderOpenPrice(), Digits)
+                   + " SL " + (OrderStopLoss() > 0.0 ? DoubleToString(OrderStopLoss(), Digits) : "-")
+                   + " TP " + (OrderTakeProfit() > 0.0 ? DoubleToString(OrderTakeProfit(), Digits) : "-")
+                   + " | " + GeldText(gw) + "\n";
+   }
+   if(n == 0)
+      return "Keine offenen Positionen (" + HtmlEscape(Symbol()) + ", Magic " + IntegerToString(MagicNumber) + ").";
+   return "<b>Offene Positionen " + HtmlEscape(Symbol()) + "</b>\n" + zeilen + "Summe: " + GeldText(summe);
+}
+
+// Heute (Serverzeit-Tag) geschlossene Trades dieses EAs aus der Kontohistorie
+string TgHeuteText()
+{
+   datetime tag0 = (datetime)((long)TimeCurrent() / 86400 * 86400);
+   int    n = 0, gew = 0, verl = 0, tBest = 0, tSchlecht = 0;
+   double summe = 0.0, best = 0.0, schlecht = 0.0;
+   for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
+   {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
+         continue;
+      if(OrderMagicNumber() != MagicNumber || OrderSymbol() != Symbol() || OrderType() > OP_SELL)
+         continue;
+      if(OrderCloseTime() < tag0)
+         continue;
+      double gw = OrderProfit() + OrderSwap() + OrderCommission();
+      if(n == 0 || gw > best)
+      {
+         best  = gw;
+         tBest = OrderTicket();
+      }
+      if(n == 0 || gw < schlecht)
+      {
+         schlecht   = gw;
+         tSchlecht  = OrderTicket();
+      }
+      n++;
+      summe += gw;
+      if(gw > 0.0)
+         gew++;
+      else if(gw < 0.0)
+         verl++;
+   }
+   if(n == 0)
+      return "Heute noch keine geschlossenen Trades (" + HtmlEscape(Symbol()) + ", Magic " + IntegerToString(MagicNumber)
+             + "). Hinweis: Die Kontohistorie muss im Terminal geladen sein.";
+   return "<b>Heute geschlossen " + HtmlEscape(Symbol()) + "</b>\n"
+        + IntegerToString(n) + " Trades: " + IntegerToString(gew) + " Gewinner, " + IntegerToString(verl) + " Verlierer\n"
+        + "Summe: " + GeldText(summe) + "\n"
+        + "Bester: #" + IntegerToString(tBest) + " " + GeldText(best) + "\n"
+        + "Schlechtester: #" + IntegerToString(tSchlecht) + " " + GeldText(schlecht);
+}
+
+// Tastatur mit zwei Knöpfen für Bestätigungen
+string TgTastaturCfg(string textJa, string dataJa, string textNein, string dataNein)
+{
+   return "{\"inline_keyboard\":[[{\"text\":\"" + JsonEscape(textJa) + "\",\"callback_data\":\"" + dataJa + "\"},"
+          + "{\"text\":\"" + JsonEscape(textNein) + "\",\"callback_data\":\"" + dataNein + "\"}]]}";
+}
+
+// Offene Bestätigungs-Anfragen, deren 60 Sekunden um sind: Nachricht ändern, Knöpfe entfernen
+void TgCfgAblaufPruefen()
+{
+   if(g_cfgAutoMsg > 0 && TimeLocal() > g_cfgAutoBis)
+   {
+      long m = g_cfgAutoMsg;
+      g_cfgAutoMsg = 0;
+      TgNachrichtBearbeiten(m, "⌛ Bestätigung abgelaufen (60 s) - Modus unverändert.");
+   }
+   if(g_cfgSchlMsg > 0 && TimeLocal() > g_cfgSchlBis)
+   {
+      long m = g_cfgSchlMsg;
+      g_cfgSchlMsg = 0;
+      TgNachrichtBearbeiten(m, "⌛ Bestätigung abgelaufen (60 s) - nichts geschlossen.");
+   }
+   if(g_cfgZuMsg > 0 && TimeLocal() > g_cfgZuBis)
+   {
+      long m = g_cfgZuMsg;
+      g_cfgZuMsg = 0;
+      TgNachrichtBearbeiten(m, "⌛ Bestätigung abgelaufen (60 s) - Position bleibt offen.");
+   }
+   if(g_cfgHandMsg > 0 && TimeLocal() > g_cfgHandBis)
+   {
+      long m = g_cfgHandMsg;
+      g_cfgHandMsg = 0;
+      TgNachrichtBearbeiten(m, "⌛ Bestätigung abgelaufen (30 s) - kein Trade eröffnet.");
+   }
+   if(g_cfgStartMsg > 0 && TimeLocal() > g_cfgStartBis)
+   {
+      long m = g_cfgStartMsg;
+      g_cfgStartMsg = 0;
+      TgNachrichtBearbeiten(m, "⌛ Bestätigung abgelaufen (60 s) - Sperre bleibt.");
+   }
+}
+
+// Knopfdruck "cfg_..." (Bestätigung Vollautomatik / Alle schließen). msgId = Nachricht mit den Knöpfen.
+void TgCfgCallback(string cbId, string data, long msgId)
+{
+   if(data == "cfg_auto_ja" || data == "cfg_auto_nein")
+   {
+      if(g_cfgAutoMsg <= 0 || msgId != g_cfgAutoMsg)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         if(msgId > 0)
+            TgNachrichtBearbeiten(msgId, "⌛ Anfrage nicht mehr gültig.");
+         return;
+      }
+      g_cfgAutoMsg = 0;
+      if(TimeLocal() > g_cfgAutoBis)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         TgNachrichtBearbeiten(msgId, "⌛ Bestätigung abgelaufen (60 s) - Modus unverändert.");
+         return;
+      }
+      if(data == "cfg_auto_ja")
+      {
+         ModusSetzen(VOLLAUTOMATIK);
+         Print("ScalpScout Fern: Modus → Vollautomatik (per Telegram bestätigt)");
+         TgCallbackAntwort(cbId, "Vollautomatik an");
+         TgNachrichtBearbeiten(msgId, "✅ Vollautomatik eingeschaltet. Wechsel zurück: /modus manuell oder /modus signale. "
+                                      + "Nach einem Neustart gilt wieder der Input-Modus.");
+      }
+      else
+      {
+         TgCallbackAntwort(cbId, "abgebrochen");
+         TgNachrichtBearbeiten(msgId, "❌ Abgebrochen - Modus unverändert (" + ModusText() + ").");
+      }
+      UiAktualisieren();
+      return;
+   }
+
+   if(data == "cfg_schl_ja" || data == "cfg_schl_nein")
+   {
+      if(g_cfgSchlMsg <= 0 || msgId != g_cfgSchlMsg)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         if(msgId > 0)
+            TgNachrichtBearbeiten(msgId, "⌛ Anfrage nicht mehr gültig.");
+         return;
+      }
+      g_cfgSchlMsg = 0;
+      if(TimeLocal() > g_cfgSchlBis)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         TgNachrichtBearbeiten(msgId, "⌛ Bestätigung abgelaufen (60 s) - nichts geschlossen.");
+         return;
+      }
+      if(data == "cfg_schl_ja")
+      {
+         TgCallbackAntwort(cbId, "schließe ...");
+         Print("ScalpScout Fern: Alle schließen (per Telegram bestätigt)");
+         int gz = 0, fe = 0;
+         AlleSchliessen(gz, fe);
+         TgNachrichtBearbeiten(msgId, "✅ Alle schließen ausgeführt: " + IntegerToString(gz) + " geschlossen, "
+                                      + IntegerToString(fe) + " Fehler. Neue Trades sind gesperrt - mit /start wieder freigeben.");
+      }
+      else
+      {
+         TgCallbackAntwort(cbId, "abgebrochen");
+         TgNachrichtBearbeiten(msgId, "❌ Abgebrochen - nichts geschlossen.");
+      }
+      UiAktualisieren();
+      return;
+   }
+   if(StringFind(data, "cfg_zu_") == 0)
+   {
+      string rest = StringSubstr(data, 7);
+      int    us   = StringFind(rest, "_");
+      int    tk   = (us > 0) ? (int)StringToInteger(StringSubstr(rest, 0, us)) : 0;
+      string ans  = (us > 0) ? StringSubstr(rest, us + 1) : "";
+      if(g_cfgZuMsg <= 0 || msgId != g_cfgZuMsg || tk != g_cfgZuTicket || (ans != "ja" && ans != "nein"))
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         if(msgId > 0)
+            TgNachrichtBearbeiten(msgId, "⌛ Anfrage nicht mehr gültig.");
+         return;
+      }
+      g_cfgZuMsg = 0;
+      if(TimeLocal() > g_cfgZuBis)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         TgNachrichtBearbeiten(msgId, "⌛ Bestätigung abgelaufen (60 s) - Position bleibt offen.");
+         return;
+      }
+      if(ans == "ja")
+      {
+         TgCallbackAntwort(cbId, "schließe ...");
+         string fe = "";
+         if(PositionSchliessen(tk, fe))
+            TgNachrichtBearbeiten(msgId, "✅ Position #" + IntegerToString(tk) + " geschlossen.");
+         else
+            TgNachrichtBearbeiten(msgId, "⚠️ #" + IntegerToString(tk) + " nicht geschlossen: " + HtmlEscape(fe));
+      }
+      else
+      {
+         TgCallbackAntwort(cbId, "abgebrochen");
+         TgNachrichtBearbeiten(msgId, "❌ Abgebrochen - Position #" + IntegerToString(tk) + " bleibt offen.");
+      }
+      UiAktualisieren();
+      return;
+   }
+
+   if(data == "cfg_hand_ja" || data == "cfg_hand_nein")
+   {
+      if(g_cfgHandMsg <= 0 || msgId != g_cfgHandMsg)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         if(msgId > 0)
+            TgNachrichtBearbeiten(msgId, "⌛ Anfrage nicht mehr gültig.");
+         return;
+      }
+      g_cfgHandMsg = 0;
+      if(TimeLocal() > g_cfgHandBis)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         TgNachrichtBearbeiten(msgId, "⌛ Bestätigung abgelaufen (30 s) - kein Trade eröffnet.");
+         return;
+      }
+      if(data == "cfg_hand_ja")
+      {
+         TgCallbackAntwort(cbId, "sende Order ...");
+         Print("ScalpScout Fern: Hand-Trade ", (g_cfgHandRicht > 0 ? "KAUF" : "VERKAUF"), " (per Telegram bestätigt)");
+         TgNachrichtBearbeiten(msgId, TgHandAusfuehren());
+      }
+      else
+      {
+         TgCallbackAntwort(cbId, "abgebrochen");
+         TgNachrichtBearbeiten(msgId, "❌ Abgebrochen - kein Trade eröffnet.");
+      }
+      UiAktualisieren();
+      return;
+   }
+
+   if(data == "cfg_start_ja" || data == "cfg_start_nein")
+   {
+      if(g_cfgStartMsg <= 0 || msgId != g_cfgStartMsg)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         if(msgId > 0)
+            TgNachrichtBearbeiten(msgId, "⌛ Anfrage nicht mehr gültig.");
+         return;
+      }
+      g_cfgStartMsg = 0;
+      if(TimeLocal() > g_cfgStartBis)
+      {
+         TgCallbackAntwort(cbId, "abgelaufen");
+         TgNachrichtBearbeiten(msgId, "⌛ Bestätigung abgelaufen (60 s) - Sperre bleibt.");
+         return;
+      }
+      if(data == "cfg_start_ja")
+      {
+         g_gestoppt = false;
+         g_tgPause  = false;
+         HinweisSetzen("Kill-Switch-Sperre per Telegram gelöst");
+         Print("ScalpScout Fern: Kill-Switch-Sperre gelöst (per Telegram bestätigt)");
+         TgCallbackAntwort(cbId, "Sperre gelöst");
+         TgNachrichtBearbeiten(msgId, "✅ Kill-Switch-Sperre gelöst, neue Trades sind wieder erlaubt.");
+      }
+      else
+      {
+         TgCallbackAntwort(cbId, "abgebrochen");
+         TgNachrichtBearbeiten(msgId, "❌ Abgebrochen - Sperre bleibt, bis /start bestätigt wird.");
+      }
+      UiAktualisieren();
+      return;
+   }
+   TgCallbackAntwort(cbId, "unbekannt");
+}
+
+// Änderung melden: Journal + Telegram + Oberfläche
+void TgGeaendert(string name, string alt, string neu)
+{
+   string z = name + ": " + alt + " → " + neu;
+   Print("ScalpScout Fern: ", z, " (per Telegram)");
+   TgNachrichtSenden("✅ " + HtmlEscape(z), "");
+   UiAktualisieren();
+}
+
+// Zahl prüfen (Bereich mn..mx). Bei Fehler Meldung mit erlaubtem Bereich, Rückgabe false.
+bool TgBereichOK(string cmd, string arg, double mn, double mx, int dez, string einheit, double &w)
+{
+   if(ZahlLesen(arg, w) && w >= mn - 1e-9 && w <= mx + 1e-9)
+   {
+      w = MathMax(mn, MathMin(mx, w));
+      return true;
+   }
+   TgNachrichtSenden("⚠️ " + cmd + ": " + ((arg == "") ? "Wert fehlt" : "ungültiger Wert '" + HtmlEscape(arg) + "'")
+                     + ". Erlaubt: " + DoubleToString(mn, dez) + " bis " + DoubleToString(mx, dez) + einheit + ".", "");
+   return false;
+}
+
+// Einstellbefehle /risiko /maxlot /limit /zeit /koerper /volumen /ausbruch. true = Befehl erkannt.
+bool TgEinstellung(string cmd, string arg)
+{
+   double w = 0.0;
+   string alt;
+
+   if(cmd == "/risiko")
+   {
+      if(!TgBereichOK(cmd, arg, 0.1, 25.0, 1, " %", w))
+         return true;
+      w   = NormalizeDouble(w, 2);
+      alt = DoubleToString(g_risiko, 1) + " %";
+      g_risiko = w;
+      FernSpeichern("risiko", g_risiko);
+      TgGeaendert("Risiko", alt, DoubleToString(g_risiko, 1) + " %");
+      return true;
+   }
+   if(cmd == "/maxlot")
+   {
+      double mn = MinLotWert();
+      double mx = MaxLotGrenze();
+      if(mx < mn - 1e-9)
+      {
+         TgNachrichtSenden("⚠️ /maxlot: Obergrenze (" + LotText(mx) + ") liegt unter MinLot (" + LotText(mn)
+                           + ") - nicht änderbar.", "");
+         return true;
+      }
+      if(!TgBereichOK(cmd, arg, mn, mx, LotStellenAktuell(), " Lot", w))
+         return true;
+      double l = LotAbrunden(w);
+      if(l < mn - 1e-9)
+         l = mn;
+      alt = LotText(g_maxLot) + " Lot";
+      g_maxLot = l;
+      FernSpeichern("maxlot", g_maxLot);
+      TgGeaendert("MaxLot", alt, LotText(g_maxLot) + " Lot");
+      return true;
+   }
+   if(cmd == "/limit")
+   {
+      if(arg == "aus" || arg == "off" || arg == "0")
+         w = 0.0;
+      else if(!TgBereichOK(cmd, arg, 1.0, 100.0, 0, " % (oder 'aus')", w))
+         return true;
+      w   = NormalizeDouble(w, 2);
+      alt = LimitText(g_tagesLimitProz);
+      g_tagesLimitProz = w;
+      FernSpeichern("limit", g_tagesLimitProz);
+      g_tagesLimit = false;       // mit neuem Limit neu bewerten (rastet bei Überschreitung sofort wieder ein)
+      TagPruefen();
+      TgGeaendert("Tageslimit", alt, LimitText(g_tagesLimitProz)
+                  + (g_tagesLimit ? " (heute schon erreicht - Sperre bleibt)" : ""));
+      return true;
+   }
+   if(cmd == "/zeit")
+   {
+      int sp = StringFind(arg, "-");
+      int a = -1, b = -1;
+      if(sp > 0)
+      {
+         a = ZeitLesen(StringSubstr(arg, 0, sp));
+         b = ZeitLesen(StringSubstr(arg, sp + 1));
+      }
+      if(a < 0 || b < 0)
+      {
+         TgNachrichtSenden("⚠️ /zeit: Format HH:MM-HH:MM erwartet (Serverzeit), z. B. /zeit 08:00-20:00. "
+                           + "Gleiche Start- und Endzeit = durchgehend.", "");
+         return true;
+      }
+      alt = MinutenText(g_startMin) + "-" + MinutenText(g_endeMin);
+      g_startMin = a;
+      g_endeMin  = b;
+      FernSpeichern("start", a);
+      FernSpeichern("ende", b);
+      TgGeaendert("Handelsfenster", alt, MinutenText(a) + "-" + MinutenText(b) + " Serverzeit");
+      return true;
+   }
+   if(cmd == "/koerper" || cmd == "/körper")
+   {
+      if(!TgBereichOK(cmd, arg, 0.5, 4.0, 1, " (×ATR)", w))
+         return true;
+      w   = NormalizeDouble(w, 2);
+      alt = DoubleToString(g_impulsFaktor, 2) + "×ATR";
+      g_impulsFaktor = w;
+      FernSpeichern("impuls", g_impulsFaktor);
+      TgGeaendert("Körper-Faktor", alt, DoubleToString(g_impulsFaktor, 2) + "×ATR");
+      return true;
+   }
+   if(cmd == "/volumen")
+   {
+      if(!TgBereichOK(cmd, arg, 0.8, 4.0, 1, " (×Durchschnitt)", w))
+         return true;
+      w   = NormalizeDouble(w, 2);
+      alt = DoubleToString(g_volumenFaktor, 2) + "×Ø";
+      g_volumenFaktor = w;
+      FernSpeichern("volumen", g_volumenFaktor);
+      TgGeaendert("Volumen-Faktor", alt, DoubleToString(g_volumenFaktor, 2) + "×Ø");
+      return true;
+   }
+   if(cmd == "/ausbruch")
+   {
+      if(!TgBereichOK(cmd, arg, 2.0, 50.0, 0, " Kerzen (ganze Zahl)", w))
+         return true;
+      if(MathAbs(w - MathRound(w)) > 1e-9)
+      {
+         TgNachrichtSenden("⚠️ /ausbruch: ganze Zahl von 2 bis 50 erwartet.", "");
+         return true;
+      }
+      alt = IntegerToString(g_breakoutKerzen) + " Kerzen";
+      g_breakoutKerzen = (int)MathRound(w);
+      FernSpeichern("ausbruch", g_breakoutKerzen);
+      TgGeaendert("Ausbruch", alt, IntegerToString(g_breakoutKerzen) + " Kerzen");
+      return true;
+   }
+   return false;
+}
+
+// /modus manuell | signale | auto
+void TgModusBefehl(string arg)
+{
+   if(arg == "manuell" || arg == "freigabe")
+   {
+      if(g_modus == MANUELLE_FREIGABE)
+      {
+         TgNachrichtSenden("Modus ist bereits: " + ModusText(), "");
+         return;
+      }
+      string alt = ModusText();
+      ModusSetzen(MANUELLE_FREIGABE);
+      TgGeaendert("Modus", alt, ModusText());
+   }
+   else if(arg == "signale" || arg == "signal")
+   {
+      if(g_modus == NUR_SIGNALE)
+      {
+         TgNachrichtSenden("Modus ist bereits: " + ModusText(), "");
+         return;
+      }
+      string alt = ModusText();
+      ModusSetzen(NUR_SIGNALE);
+      TgGeaendert("Modus", alt, ModusText());
+   }
+   else if(arg == "auto" || arg == "vollautomatik" || arg == "automatik")
+   {
+      if(g_modus == VOLLAUTOMATIK)
+      {
+         TgNachrichtSenden("Modus ist bereits: " + ModusText(), "");
+         return;
+      }
+      if(g_cfgAutoMsg > 0)      // frühere offene Anfrage ersetzen
+         TgNachrichtBearbeiten(g_cfgAutoMsg, "⌛ ersetzt durch neue Anfrage.");
+      g_cfgAutoMsg = TgNachrichtSenden("⚠️ <b>Vollautomatik</b> einschalten?\nDer EA eröffnet dann Trades selbst, ohne Freigabe "
+                                       + "(Risiko " + DoubleToString(g_risiko, 1) + " %, MaxLot " + LotText(g_maxLot)
+                                       + ").\nBestätigung gilt 60 Sekunden.",
+                                       TgTastaturCfg("✅ Vollautomatik einschalten", "cfg_auto_ja",
+                                                     "❌ Abbrechen", "cfg_auto_nein"));
+      g_cfgAutoBis = TimeLocal() + 60;
+   }
+   else
+      TgNachrichtSenden("⚠️ /modus: manuell, signale oder auto erwartet. Aktuell: " + ModusText() + ".", "");
+}
+
+// /schliessen: erst Rückfrage per Knöpfe (die Ausführung kommt aus TgCfgCallback)
+void TgSchliessenAnfrage()
+{
+   int n = ZaehlePositionen();
+   if(n == 0)
+   {
+      TgNachrichtSenden("Keine offenen Positionen - nichts zu schließen.", "");
+      return;
+   }
+   if(g_cfgSchlMsg > 0)
+      TgNachrichtBearbeiten(g_cfgSchlMsg, "⌛ ersetzt durch neue Anfrage.");
+   g_cfgSchlMsg = TgNachrichtSenden("⚠️ <b>Alle " + IntegerToString(n) + " Position(en)</b> auf " + HtmlEscape(Symbol())
+                                    + " jetzt schließen? Aktuell " + GeldText(OffenerGewinn())
+                                    + ".\nDanach sind neue Trades gesperrt - mit /start wieder freigeben.\n"
+                                      + "Bestätigung gilt 60 Sekunden.",
+                                    TgTastaturCfg("✅ Alle schließen", "cfg_schl_ja", "❌ Abbrechen", "cfg_schl_nein"));
+   g_cfgSchlBis = TimeLocal() + 60;
+}
+
+// /reset: Fern-Einstellungen löschen, Inputs gelten wieder
+void TgReset()
+{
+   string abw = FernAbweichungen();
+   FernAlleLoeschen();
+   ENUM_MODUS alt = g_modus;
+   FernInputsUebernehmen();
+   if(g_berichtMin >= 0 && TimeHour(TimeCurrent()) * 60 + TimeMinute(TimeCurrent()) >= g_berichtMin)
+      g_berichtTag = (datetime)((long)TimeCurrent() / 86400 * 86400);   // heute nicht nachträglich senden
+   if(alt != g_modus && g_modus != MANUELLE_FREIGABE && g_sig.aktiv)
+      SignalVerwerfen("Reset", "⌛ verworfen (Reset)");
+   g_tagesLimit = false;        // mit dem Input-Limit neu bewerten
+   TagPruefen();
+   g_fernInfo = "";
+   HinweisSetzen("Fern-Einstellungen zurückgesetzt");
+   Print("ScalpScout Fern: Reset, Inputs aktiv (", WerteText(), ")");
+   TgNachrichtSenden("♻️ Fern-Einstellungen gelöscht, die Inputs gelten wieder.\n"
+                     + ((abw == "") ? "Es gab keine Fern-Änderungen.\n" : "Zurückgesetzt wurden: " + HtmlEscape(abw) + "\n")
+                     + "Jetzt aktiv: " + HtmlEscape(WerteText()), "");
+   UiAktualisieren();
+}
+
+//+------------------------------------------------------------------+
+//| Fernsteuerung Teil 2: Einzelpositionen, Hand-Trades, Bericht     |
+//+------------------------------------------------------------------+
+// Ticket aus Text lesen (ganze positive Zahl)
+bool TicketLesen(string s, int &ticket)
+{
+   double w = 0.0;
+   if(!ZahlLesen(s, w) || w < 1.0 || w > 2147483000.0 || MathAbs(w - MathRound(w)) > 1e-9)
+      return false;
+   ticket = (int)MathRound(w);
+   return true;
+}
+
+// Wählt das Ticket aus, wenn es eine offene Position dieses EAs ist (Symbol + Magic)
+bool EigenePositionWaehlen(int ticket)
+{
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return false;
+   return (OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber && OrderType() <= OP_SELL
+           && OrderCloseTime() == 0);
+}
+
+// Eine Position schließen (3 Versuche), ohne MessageBox und ohne Sperre neuer Trades
+bool PositionSchliessen(int ticket, string &fehler)
+{
+   fehler = "";
+   if(!EigenePositionWaehlen(ticket))
+   {
+      fehler = "Ticket nicht (mehr) offen";
+      return false;
+   }
+   int    typ   = OrderType();
+   double lots  = OrderLots();
+   int    slip  = SlippagePunkte();
+   int    err   = 0;
+   for(int v = 1; v <= 3; v++)
+   {
+      RefreshRates();
+      double preis = (typ == OP_BUY) ? Bid : Ask;
+      ResetLastError();
+      if(OrderClose(ticket, lots, preis, slip, clrOrange))
+      {
+         Print("ScalpScout: Position #", ticket, " geschlossen (per Telegram)");
+         return true;
+      }
+      err = GetLastError();
+      LogFehler("OrderClose #" + IntegerToString(ticket) + " (Versuch " + IntegerToString(v) + ")", err);
+      if(!IsTesting())
+         Sleep(200);
+      if(!OrderSelect(ticket, SELECT_BY_TICKET) || OrderCloseTime() > 0)
+         break;
+   }
+   fehler = FehlerText(err) + " (" + IntegerToString(err) + ")";
+   return false;
+}
+
+// /zu <ticket>: Rückfrage mit Knöpfen (60 s)
+void TgZuAnfrage(string arg)
+{
+   int ticket = 0;
+   if(!TicketLesen(arg, ticket))
+   {
+      TgNachrichtSenden("⚠️ /zu: Ticketnummer erwartet, z. B. /zu 12345678 (siehe /positionen).", "");
+      return;
+   }
+   if(!EigenePositionWaehlen(ticket))
+   {
+      TgNachrichtSenden("⚠️ /zu: #" + IntegerToString(ticket) + " ist keine offene Position dieses EAs (Symbol, Magic).", "");
+      return;
+   }
+   double gw = OrderProfit() + OrderSwap() + OrderCommission();
+   string txt = "#" + IntegerToString(ticket) + " " + (OrderType() == OP_BUY ? "BUY " : "SELL ") + LotText(OrderLots())
+                + " @" + DoubleToString(OrderOpenPrice(), Digits) + " | " + GeldText(gw);
+   if(g_cfgZuMsg > 0)
+      TgNachrichtBearbeiten(g_cfgZuMsg, "⌛ ersetzt durch neue Anfrage.");
+   g_cfgZuTicket = ticket;
+   g_cfgZuMsg = TgNachrichtSenden("⚠️ Position schließen?\n" + HtmlEscape(txt) + "\nBestätigung gilt 60 Sekunden.",
+                                  TgTastaturCfg("✅ Schließen", "cfg_zu_" + IntegerToString(ticket) + "_ja",
+                                                "❌ Abbrechen", "cfg_zu_" + IntegerToString(ticket) + "_nein"));
+   g_cfgZuBis = TimeLocal() + 60;
+}
+
+// /sl und /tp: <ticket> <preis>   bzw.   /sl <ticket> be
+void TgSlTpBefehl(string cmd, string arg)
+{
+   bool istSL = (cmd == "/sl");
+   int sp = StringFind(arg, " ");
+   string a1 = arg, a2 = "";
+   if(sp > 0)
+   {
+      a1 = StringSubstr(arg, 0, sp);
+      a2 = StringSubstr(arg, sp + 1);
+      StringTrimLeft(a2);
+      StringTrimRight(a2);
+   }
+   int ticket = 0;
+   if(!TicketLesen(a1, ticket) || a2 == "")
+   {
+      TgNachrichtSenden("⚠️ " + cmd + ": Format " + cmd + " &lt;ticket&gt; &lt;preis&gt;" + (istSL ? " oder /sl &lt;ticket&gt; be" : "")
+                        + ". Tickets siehe /positionen.", "");
+      return;
+   }
+   if(!EigenePositionWaehlen(ticket))
+   {
+      TgNachrichtSenden("⚠️ " + cmd + ": #" + IntegerToString(ticket) + " ist keine offene Position dieses EAs (Symbol, Magic).", "");
+      return;
+   }
+   int    typ    = OrderType();
+   double offen  = OrderOpenPrice();
+   double slAlt  = OrderStopLoss();
+   double tpAlt  = OrderTakeProfit();
+   double preis  = 0.0;
+   if(istSL && a2 == "be")
+      preis = NormalizeDouble(offen + ((typ == OP_BUY) ? 1 : -1) * BE_PufferPunkte * Point, Digits);
+   else if(ZahlLesen(a2, preis) && preis > 0.0)
+      preis = NormalizeDouble(preis, Digits);
+   else
+   {
+      TgNachrichtSenden("⚠️ " + cmd + ": ungültiger Preis '" + HtmlEscape(a2) + "'.", "");
+      return;
+   }
+
+   // richtige Seite und Mindestabstand (StopLevel) zum aktuellen Kurs
+   RefreshRates();
+   double stopLvl = MarketInfo(Symbol(), MODE_STOPLEVEL) * Point;
+   double grenze;
+   bool   ok;
+   string regel;
+   if(typ == OP_BUY)
+   {
+      if(istSL) { grenze = NormalizeDouble(Bid - stopLvl, Digits); ok = (preis <= grenze); regel = "höchstens " + DoubleToString(grenze, Digits); }
+      else      { grenze = NormalizeDouble(Bid + stopLvl, Digits); ok = (preis >= grenze); regel = "mindestens " + DoubleToString(grenze, Digits); }
+   }
+   else
+   {
+      if(istSL) { grenze = NormalizeDouble(Ask + stopLvl, Digits); ok = (preis >= grenze); regel = "mindestens " + DoubleToString(grenze, Digits); }
+      else      { grenze = NormalizeDouble(Ask - stopLvl, Digits); ok = (preis <= grenze); regel = "höchstens " + DoubleToString(grenze, Digits); }
+   }
+   if(!ok)
+   {
+      TgNachrichtSenden("⚠️ " + cmd + " #" + IntegerToString(ticket) + ": " + DoubleToString(preis, Digits) + " nicht erlaubt. "
+                        + (typ == OP_BUY ? "BUY" : "SELL") + "-" + (istSL ? "SL" : "TP") + " muss " + regel
+                        + " liegen (Kurs " + DoubleToString(typ == OP_BUY ? Bid : Ask, Digits) + ", StopLevel "
+                        + DoubleToString(stopLvl / Point, 0) + " Pkt)"
+                        + ((istSL && a2 == "be") ? " - die Position ist noch nicht weit genug im Gewinn." : "."), "");
+      return;
+   }
+
+   ResetLastError();
+   double neuSL = istSL ? preis : slAlt;
+   double neuTP = istSL ? tpAlt : preis;
+   if(!OrderModify(ticket, offen, neuSL, neuTP, 0, clrDodgerBlue))
+   {
+      int err = GetLastError();
+      LogFehler("OrderModify #" + IntegerToString(ticket), err);
+      TgNachrichtSenden("⚠️ " + cmd + " #" + IntegerToString(ticket) + " fehlgeschlagen: " + HtmlEscape(FehlerText(err))
+                        + " (" + IntegerToString(err) + ")", "");
+      return;
+   }
+   double alt = istSL ? slAlt : tpAlt;
+   TgGeaendert((istSL ? "SL" : "TP") + " #" + IntegerToString(ticket),
+               (alt > 0.0) ? DoubleToString(alt, Digits) : "-", DoubleToString(preis, Digits));
+}
+
+// /kauf [lot] und /verkauf [lot]: Vorschau mit Knöpfen (30 s), Ausführung erst nach ✅
+void TgHandTradeAnfrage(int richtung, string arg)
+{
+   string cmd = (richtung > 0) ? "/kauf" : "/verkauf";
+   double lot = 0.0;                      // 0 = Lot aus Risiko %
+   if(arg != "")
+   {
+      double mn = MinLotWert(), mx = MaxLotGrenze();
+      if(mx < mn - 1e-9)
+      {
+         TgNachrichtSenden("⚠️ " + cmd + ": Obergrenze (" + LotText(mx) + ") liegt unter MinLot (" + LotText(mn) + ").", "");
+         return;
+      }
+      if(!TgBereichOK(cmd, arg, mn, mx, LotStellenAktuell(), " Lot", lot))
+         return;
+      lot = LotAbrunden(lot);
+      if(lot < mn - 1e-9)
+         lot = mn;
+   }
+   RefreshRates();
+   double atr = AktuelleATR();
+   string grund = "";
+   if(!HandelErlaubt(grund, atr, true))
+   {
+      TgNachrichtSenden("⚠️ " + cmd + " nicht möglich: " + HtmlEscape(grund), "");
+      return;
+   }
+   Plan p;
+   if(!BerechnePlan(richtung, atr, p, grund, lot))
+   {
+      TgNachrichtSenden("⚠️ " + cmd + " nicht möglich: " + HtmlEscape(grund), "");
+      return;
+   }
+   double maxSp = MaxSpreadAktuell(atr);
+   string kosten = "Kosten: " + KostenText(p.spreadPkt, p.kommPkt) + " Pkt (Limit " + DoubleToString(maxSp, 1) + ")"
+                   + ((p.spreadPkt + p.kommPkt > maxSp) ? " - über dem Limit, wird bei Hand-Trades ignoriert" : "");
+   if(g_cfgHandMsg > 0)
+      TgNachrichtBearbeiten(g_cfgHandMsg, "⌛ ersetzt durch neue Anfrage.");
+   g_cfgHandRicht = richtung;
+   g_cfgHandLot   = lot;
+   g_cfgHandMsg = TgNachrichtSenden("⚠️ <b>Hand-Trade " + HtmlEscape(Symbol()) + " " + ((richtung > 0) ? "🟢 KAUF" : "🔴 VERKAUF")
+                                    + "</b>\nEinstieg ca.: " + DoubleToString(p.preis, Digits) + "\n"
+                                    + "SL: " + DoubleToString(p.sl, Digits) + " (" + DoubleToString(p.slDist / Point, 0) + " Pkt)\n"
+                                    + "TP: " + DoubleToString(p.tp, Digits) + " (" + DoubleToString(p.tpDist / Point, 0) + " Pkt)\n"
+                                    + "Lot: " + LotText(p.lot) + ((lot > 0.0) ? " (vorgegeben)" : " (Risiko " + DoubleToString(g_risiko, 1) + " %)") + "\n"
+                                    + kosten + "\nBestätigung gilt 30 Sekunden.",
+                                    TgTastaturCfg("✅ Ausführen", "cfg_hand_ja", "❌ Abbrechen", "cfg_hand_nein"));
+   g_cfgHandBis = TimeLocal() + 30;
+}
+
+// Hand-Trade nach Bestätigung: Filter (ohne Zeitfenster/Spread) erneut prüfen, Order senden
+string TgHandAusfuehren()
+{
+   RefreshRates();
+   double atr = AktuelleATR();
+   string grund = "";
+   int r = g_cfgHandRicht;
+   if(!HandelErlaubt(grund, atr, true))
+   {
+      DiagVerworfen(grund);
+      return "⚠️ Nicht ausgeführt: " + HtmlEscape(grund);
+   }
+   if(!OrderOeffnen(r, atr, grund, g_cfgHandLot))
+   {
+      DiagVerworfen(grund);
+      return "⚠️ Order fehlgeschlagen: " + HtmlEscape(grund);
+   }
+   HinweisSetzen("Hand-Trade " + (r > 0 ? "KAUF" : "VERKAUF") + " #" + IntegerToString(g_orderTicket));
+   return "✅ Ausgeführt: " + (r > 0 ? "BUY" : "SELL") + " #" + IntegerToString(g_orderTicket) + " @"
+          + DoubleToString(g_orderPreis, Digits);
+}
+
+// /be und /trailing: an | aus
+void TgSchalter(string cmd, string arg)
+{
+   bool an;
+   if(arg == "an" || arg == "ein" || arg == "on" || arg == "1")
+      an = true;
+   else if(arg == "aus" || arg == "off" || arg == "0")
+      an = false;
+   else
+   {
+      TgNachrichtSenden("⚠️ " + cmd + ": an oder aus erwartet. Aktuell: "
+                        + ((cmd == "/be" ? g_beAktiv : g_trailingAktiv) ? "an" : "aus") + ".", "");
+      return;
+   }
+   if(cmd == "/be")
+   {
+      string alt = g_beAktiv ? "an" : "aus";
+      g_beAktiv = an;
+      FernSpeichern("be", an ? 1.0 : 0.0);
+      TgGeaendert("Break-even", alt, an ? "an" : "aus");
+   }
+   else
+   {
+      string alt = g_trailingAktiv ? "an" : "aus";
+      g_trailingAktiv = an;
+      FernSpeichern("trailing", an ? 1.0 : 0.0);
+      TgGeaendert("Trailing", alt, an ? "an" : "aus");
+   }
+}
+
+string BerichtZeitText(int m)
+{
+   return (m >= 0) ? MinutenText(m) + " Serverzeit" : "aus";
+}
+
+string TgBerichtText()
+{
+   string abw = FernAbweichungen();
+   return "<b>Tagesbericht " + HtmlEscape(Symbol()) + " " + TimeToString(TimeCurrent(), TIME_DATE) + "</b>\n"
+        + TgHeuteText() + "\n"
+        + "Kontostand " + DoubleToString(AccountBalance(), 2) + ", Equity " + DoubleToString(AccountEquity(), 2) + " "
+        + AccountCurrency() + "\n"
+        + "Offene Positionen: " + IntegerToString(ZaehlePositionen()) + " (" + GeldText(OffenerGewinn()) + ")\n"
+        + "Fern-Einstellungen: " + ((abw == "") ? "keine (Inputs aktiv)" : HtmlEscape(abw));
+}
+
+// /bericht ohne Argument = sofort senden; /bericht HH:MM setzt die Uhrzeit; /bericht aus schaltet ab
+void TgBerichtBefehl(string arg)
+{
+   if(arg == "")
+   {
+      TgNachrichtSenden(TgBerichtText(), "");
+      return;
+   }
+   int m = -1;
+   if(arg != "aus" && arg != "off")
+   {
+      m = ZeitLesen(arg);
+      if(m < 0)
+      {
+         TgNachrichtSenden("⚠️ /bericht: HH:MM (Serverzeit) oder aus erwartet. Ohne Angabe wird der Bericht sofort gesendet.", "");
+         return;
+      }
+   }
+   string alt = BerichtZeitText(g_berichtMin);
+   g_berichtMin = m;
+   FernSpeichern("bericht", (double)m);
+   if(m >= 0)      // heute schon nach der neuen Uhrzeit: erst morgen
+   {
+      datetime t = TimeCurrent();
+      if(TimeHour(t) * 60 + TimeMinute(t) >= m)
+         g_berichtTag = (datetime)((long)t / 86400 * 86400);
+      else
+         g_berichtTag = 0;
+   }
+   TgGeaendert("Tagesbericht", alt, BerichtZeitText(g_berichtMin));
+}
+
+// In OnTimer: Tagesbericht einmal pro Serverzeit-Tag ab der eingestellten Uhrzeit senden
+void TagesberichtPruefen()
+{
+   if(g_berichtMin < 0 || !TgBereit() || TimeLocal() < g_berichtRetry)
+      return;
+   datetime t     = TimeCurrent();
+   datetime heute = (datetime)((long)t / 86400 * 86400);
+   if(g_berichtTag == heute || TimeHour(t) * 60 + TimeMinute(t) < g_berichtMin)
+      return;
+   if(TgNachrichtSenden(TgBerichtText(), "") > 0)
+   {
+      g_berichtTag = heute;
+      if(!IsTesting())
+         GlobalVariableSet(FernSchluessel("berichttag"), (double)heute);
+   }
+   else
+      g_berichtRetry = TimeLocal() + 60;
+}
+
+// /start bei gesetzter Kill-Switch-Sperre: Rückfrage per Knöpfe (60 s)
+void TgStartAnfrage()
+{
+   if(g_cfgStartMsg > 0)
+      TgNachrichtBearbeiten(g_cfgStartMsg, "⌛ ersetzt durch neue Anfrage.");
+   g_cfgStartMsg = TgNachrichtSenden("▶️ Pause aufgehoben.\n⚠️ Der Kill-Switch hat neue Trades gesperrt. Sperre jetzt lösen?\n"
+                                     + "Bestätigung gilt 60 Sekunden.",
+                                     TgTastaturCfg("✅ Sperre lösen", "cfg_start_ja", "❌ Abbrechen", "cfg_start_nein"));
+   g_cfgStartBis = TimeLocal() + 60;
+}
+
+// Textbefehle aus dem Chat (nur vom berechtigten Chat, Prüfung in TgUpdateBehandeln)
 void TgBefehl(string text)
 {
    string t = text;
-   StringToLower(t);
    StringTrimLeft(t);
    StringTrimRight(t);
-   if(StringFind(t, "/status") == 0)
+   if(StringGetCharacter(t, 0) != '/')
+      return;
+   string cmd = t;
+   string arg = "";
+   int sp = StringFind(t, " ");
+   if(sp > 0)
+   {
+      cmd = StringSubstr(t, 0, sp);
+      arg = StringSubstr(t, sp + 1);
+   }
+   StringToLower(cmd);
+   StringToLower(arg);
+   StringTrimLeft(arg);
+   StringTrimRight(arg);
+   int at = StringFind(cmd, "@");      // "/status@meinbot" aus Gruppen
+   if(at > 0)
+      cmd = StringSubstr(cmd, 0, at);
+
+   if(cmd == "/hilfe" || cmd == "/help")
+      TgNachrichtSenden(TgHilfeText(), "");
+   else if(cmd == "/status")
       TgNachrichtSenden(TgStatusText(), "");
-   else if(StringFind(t, "/stop") == 0)
+   else if(cmd == "/diag")
+      TgNachrichtSenden(TgDiagText(), "");
+   else if(cmd == "/stop")
    {
       g_tgPause = true;
       HinweisSetzen("Pausiert per Telegram");
       TgNachrichtSenden("⏸ Pausiert: neue Signale werden blockiert. /start hebt die Pause auf.", "");
    }
-   else if(StringFind(t, "/start") == 0)
+   else if(cmd == "/start")
    {
       g_tgPause = false;
       HinweisSetzen("Pause per Telegram aufgehoben");
-      TgNachrichtSenden("▶️ Pause aufgehoben: neue Signale sind wieder erlaubt.", "");
+      if(g_gestoppt)
+         TgStartAnfrage();
+      else
+         TgNachrichtSenden("▶️ Pause aufgehoben: neue Signale sind wieder erlaubt. Befehle: /hilfe", "");
    }
+   else if(cmd == "/modus")
+      TgModusBefehl(arg);
+   else if(cmd == "/positionen")
+      TgNachrichtSenden(TgPositionenText(), "");
+   else if(cmd == "/heute")
+      TgNachrichtSenden(TgHeuteText(), "");
+   else if(cmd == "/schliessen" || cmd == "/schließen")
+      TgSchliessenAnfrage();
+   else if(cmd == "/reset")
+      TgReset();
+   else if(cmd == "/zu")
+      TgZuAnfrage(arg);
+   else if(cmd == "/sl" || cmd == "/tp")
+      TgSlTpBefehl(cmd, arg);
+   else if(cmd == "/kauf")
+      TgHandTradeAnfrage(1, arg);
+   else if(cmd == "/verkauf")
+      TgHandTradeAnfrage(-1, arg);
+   else if(cmd == "/be" || cmd == "/trailing")
+      TgSchalter(cmd, arg);
+   else if(cmd == "/bericht")
+      TgBerichtBefehl(arg);
+   else if(!TgEinstellung(cmd, arg))
+      TgNachrichtSenden("Unbekannter Befehl " + HtmlEscape(cmd) + ". Alle Befehle: /hilfe", "");
+   UiAktualisieren();
 }
 
 // Ein einzelnes Update (Abschnitt ab "update_id") auswerten
@@ -1399,6 +2926,16 @@ void TgUpdateBehandeln(string seg)
       if(!hatChat || IntegerToString(chat) != g_tgChat)
       {
          Print("ScalpScout Telegram: Knopfdruck aus fremdem Chat ignoriert.");
+         return;
+      }
+
+      if(StringFind(data, "cfg_") == 0)      // Einstellungs-Rückfragen (Vollautomatik, Alle schließen)
+      {
+         long mid = 0;
+         int  pmm = StringFind(seg, "\"message\":{", pc);
+         if(pmm >= 0)
+            JsonZahl(seg, "message_id", pmm, mid);
+         TgCfgCallback(cbId, data, mid);
          return;
       }
 
@@ -1631,7 +3168,15 @@ void TelegramStarten()
          g_tgOffset = uid + 1;
    }
    TgOffenMerken();
-   TgNachrichtSenden("ScalpScout auf <b>" + HtmlEscape(Symbol()) + "</b> gestartet (Modus " + ModusText() + ")", "");
+   g_cfgAutoMsg = 0;
+   g_cfgSchlMsg = 0;
+   g_cfgZuMsg = 0;
+   g_cfgHandMsg = 0;
+   g_cfgStartMsg = 0;
+   string gruss = "ScalpScout auf <b>" + HtmlEscape(Symbol()) + "</b> gestartet (Modus " + ModusText() + ")\nBefehle: /hilfe";
+   if(g_fernInfo != "")
+      gruss += "\nFern-Einstellungen aktiv: " + HtmlEscape(g_fernInfo);
+   TgNachrichtSenden(gruss, "");
 }
 
 //+------------------------------------------------------------------+
@@ -1641,7 +3186,7 @@ void TelegramStarten()
 int SignalErkennen(double &atr)
 {
    atr = 0.0;
-   int mindestens = MathMax(MathMax(ATR_Periode, EMA_Periode * 2), VolumenKerzen + BreakoutKerzen) + 5;
+   int mindestens = MathMax(MathMax(ATR_Periode, EMA_Periode * 2), VolumenKerzen + g_breakoutKerzen) + 5;
    if(iBars(Symbol(), PERIOD_M1) < mindestens)
       return 0;
 
@@ -1652,7 +3197,7 @@ int SignalErkennen(double &atr)
    double o1 = iOpen(Symbol(), PERIOD_M1, 1);
    double c1 = iClose(Symbol(), PERIOD_M1, 1);
    double koerper = MathAbs(c1 - o1);
-   if(koerper <= ImpulsFaktor * atr)
+   if(koerper <= g_impulsFaktor * atr)
       return 0;
 
    // Volumen: Kerze 1 gegen Durchschnitt der Kerzen davor (Shift 2 .. VolumenKerzen+1)
@@ -1661,14 +3206,14 @@ int SignalErkennen(double &atr)
       summe += (double)iVolume(Symbol(), PERIOD_M1, i);
    double schnitt = (VolumenKerzen > 0) ? summe / VolumenKerzen : 0.0;
    double vol1    = (double)iVolume(Symbol(), PERIOD_M1, 1);
-   if(schnitt <= 0.0 || vol1 <= VolumenFaktor * schnitt)
+   if(schnitt <= 0.0 || vol1 <= g_volumenFaktor * schnitt)
       return 0;
 
    double ema = iMA(Symbol(), PERIOD_M1, EMA_Periode, 0, MODE_EMA, PRICE_CLOSE, 1);
 
    if(c1 > o1)   // bullische Kerze -> Long prüfen
    {
-      int hi = iHighest(Symbol(), PERIOD_M1, MODE_HIGH, BreakoutKerzen, 2);
+      int hi = iHighest(Symbol(), PERIOD_M1, MODE_HIGH, g_breakoutKerzen, 2);
       if(hi < 0) return 0;
       if(c1 <= iHigh(Symbol(), PERIOD_M1, hi)) return 0;
       if(TrendFilterAktiv && c1 <= ema) return 0;
@@ -1676,7 +3221,7 @@ int SignalErkennen(double &atr)
    }
    if(c1 < o1)   // bärische Kerze -> Short prüfen
    {
-      int lo = iLowest(Symbol(), PERIOD_M1, MODE_LOW, BreakoutKerzen, 2);
+      int lo = iLowest(Symbol(), PERIOD_M1, MODE_LOW, g_breakoutKerzen, 2);
       if(lo < 0) return 0;
       if(c1 >= iLow(Symbol(), PERIOD_M1, lo)) return 0;
       if(TrendFilterAktiv && c1 >= ema) return 0;
@@ -1687,16 +3232,27 @@ int SignalErkennen(double &atr)
 
 void NeueKerzeAuswerten()
 {
+   DiagKerze();               // rein lesend: Werte der Kerze für /diag und Chart-Zeile merken
+   g_dgKerzen++;
+
    double atr;
    int sig = SignalErkennen(atr);
    if(sig == 0)
+   {
+      if(g_dgErgebnis == "")
+         g_dgErgebnis = "kein Signal";
       return;
+   }
 
    string txt = (sig > 0) ? "LONG" : "SHORT";
    string grund;
+   g_dgSignale++;
+   g_dgRichtung = sig;
 
    if(!HandelErlaubt(grund, atr))
    {
+      g_dgErgebnis = "Signal " + txt + " erkannt, aber blockiert: " + grund;
+      DiagVerworfen(grund);
       HinweisSetzen("Signal " + txt + " blockiert: " + grund);
       return;
    }
@@ -1704,9 +3260,12 @@ void NeueKerzeAuswerten()
    Plan p;
    if(!BerechnePlan(sig, atr, p, grund))
    {
+      g_dgErgebnis = "Signal " + txt + " erkannt, aber ohne Trade: " + grund;
+      DiagVerworfen(grund);
       HinweisSetzen("Signal " + txt + " ohne Trade: " + grund);
       return;
    }
+   g_dgErgebnis = "Signal " + txt;
 
    string meldung = "ScalpScout " + Symbol() + " " + txt + " @" + DoubleToString(p.preis, Digits)
                     + " SL " + DoubleToString(p.sl, Digits) + " TP " + DoubleToString(p.tp, Digits)
@@ -1730,7 +3289,11 @@ void NeueKerzeAuswerten()
                               + " @" + DoubleToString(g_orderPreis, Digits), "");
          }
          else
+         {
+            g_dgErgebnis = "Signal " + txt + " erkannt, Order fehlgeschlagen: " + grund;
+            DiagVerworfen(grund);
             HinweisSetzen("Auto-Trade " + txt + " fehlgeschlagen: " + grund);
+         }
          break;
 
       case MANUELLE_FREIGABE:
@@ -1765,10 +3328,19 @@ int OnInit()
    }
    if(ATR_Periode < 1 || EMA_Periode < 1 || VolumenKerzen < 1 || BreakoutKerzen < 1 ||
       ImpulsFaktor <= 0.0 || VolumenFaktor <= 0.0 || SL_ATR <= 0.0 || TP_ATR <= 0.0 ||
-      RisikoProzent <= 0.0 || MaxLot <= 0.0 || MaxOffenePositionen < 1 || SignalGueltigSek < 1 ||
+      RisikoProzent <= 0.0 || MaxLot <= 0.0 || FernMaxLotObergrenze <= 0.0 || MaxOffenePositionen < 1 || SignalGueltigSek < 1 ||
       KommissionProLot < 0.0)
    {
       Alert("ScalpScout: Ungültige Eingabewerte (Perioden, Faktoren, Risiko, MaxLot müssen > 0 sein, Kommission nicht negativ).");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
+   string bz = TagesberichtZeit;
+   StringTrimLeft(bz);
+   StringTrimRight(bz);
+   if(bz != "" && ParseHHMM(bz) < 0)
+   {
+      Alert("ScalpScout: TagesberichtZeit muss das Format HH:MM haben oder leer sein.");
       return INIT_PARAMETERS_INCORRECT;
    }
 
@@ -1782,7 +3354,15 @@ int OnInit()
       g_modus = VOLLAUTOMATIK;
       Print("ScalpScout: Strategietester erkannt - Modus MANUELLE_FREIGABE wird wie VOLLAUTOMATIK behandelt.");
    }
+   g_modusInput = g_modus;
    g_ui = (!IsTesting() || IsVisualMode());
+
+   // Laufzeit-Werte: erst aus den Inputs, dann (live) die per Telegram gespeicherten Änderungen
+   g_berichtTag   = 0;
+   g_berichtRetry = 0;
+   FernInputsUebernehmen();
+   FernLaden();
+   DiagZuruecksetzen();
 
    g_sig.aktiv = false;
    g_gestoppt  = false;
@@ -1821,8 +3401,8 @@ int OnInit()
    if(!IsTesting())
       EventSetTimer(1);
 
-   Print("ScalpScout gestartet: ", Symbol(), ", Modus ", ModusText(), ", MaxLot ", DoubleToString(MaxLot, 2),
-         ", Risiko ", DoubleToString(RisikoProzent, 1), " %, Digits ", Digits, ", Point ", DoubleToString(Point, Digits));
+   Print("ScalpScout gestartet: ", Symbol(), ", Modus ", ModusText(), ", MaxLot ", DoubleToString(g_maxLot, 2),
+         ", Risiko ", DoubleToString(g_risiko, 1), " %, Digits ", Digits, ", Point ", DoubleToString(Point, Digits));
    return INIT_SUCCEEDED;
 }
 
@@ -1865,6 +3445,8 @@ void OnTimer()
    TagPruefen();
    SignalPruefen();
    TgAbfragen();
+   TgCfgAblaufPruefen();
+   TagesberichtPruefen();
    TgSchliessungenPruefen();
    UiAktualisieren();
 }
@@ -1895,7 +3477,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
                                + ") auf " + Symbol() + " jetzt schließen?\n\nDanach sind neue Trades gesperrt, bis der EA neu gestartet wird.",
                                "ScalpScout - ALLES SCHLIESSEN", MB_YESNO | MB_ICONWARNING);
       if(antwort == IDYES)
-         AlleSchliessen();
+      {
+         int geschlossen = 0, fehler = 0;
+         AlleSchliessen(geschlossen, fehler);
+      }
       UiAktualisieren();
    }
 }
