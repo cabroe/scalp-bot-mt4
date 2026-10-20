@@ -5,8 +5,8 @@
 //|  vollautomatisch. Keine Gewinnzusage - Handel auf eigenes Risiko.|
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.20"
-#property description "ScalpScout - M1-Scalping-Assistent (Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung)"
+#property version     "1.30"
+#property description "ScalpScout - M1-Scalping-Assistent (Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung, Retest-Einstieg)"
 #property strict
 
 //--- Betriebsart (muss vor den Inputs definiert sein)
@@ -15,6 +15,13 @@ enum ENUM_MODUS
    MANUELLE_FREIGABE = 0,  // Manuelle Freigabe (Knopf im Chart)
    VOLLAUTOMATIK     = 1,  // Vollautomatik (handelt selbst)
    NUR_SIGNALE       = 2   // Nur Signale (Alert/Push, kein Trade)
+};
+
+//--- Einstiegsart (muss vor den Inputs definiert sein)
+enum ENUM_EINSTIEG
+{
+   EINSTIEG_SOFORT = 0,  // Sofort (direkt nach der Signalkerze)
+   EINSTIEG_RETEST = 1   // Retest (erst nach Rücklauf zur Signalkerze)
 };
 
 //+------------------------------------------------------------------+
@@ -36,6 +43,13 @@ input int    VolumenKerzen         = 20;      // Anzahl Kerzen für Durchschnitt
 input int    BreakoutKerzen        = 10;      // Ausbruch über Hoch/Tief der letzten N Kerzen
 input bool   TrendFilterAktiv      = true;    // Trendfilter (Schluss über/unter EMA) verwenden
 input int    EMA_Periode           = 50;      // EMA-Periode (M1) für Trendfilter
+
+//--- Einstieg
+input ENUM_EINSTIEG Einstieg       = EINSTIEG_SOFORT; // Einstiegsart (Sofort oder Retest nach Rücklauf)
+input double RetestAnteil          = 0.4;     // Retest: Rücklauf in Anteil des Signalkerzen-Körpers (0.2-0.8)
+input int    RetestMaxKerzen       = 4;       // Retest: Signal verfällt nach N weiteren M1-Kerzen (1-15)
+input double RetestSLPufferATR     = 0.1;     // Retest: SL-Puffer hinter dem Extrem der Signalkerze (x ATR)
+input double RetestTP_CRV          = 1.8;     // Retest: TP = x * SL-Abstand (1.0-4.0)
 
 //--- Ausstieg
 input double SL_ATR                = 1.0;     // Stop-Loss = x * ATR
@@ -84,7 +98,7 @@ input double FernMaxLotObergrenze  = 0.05;    // Per Telegram darf MaxLot höchs
 #define OBJ_PNL_NO       "SSC_pnl_btn_no"
 #define OBJ_INFO_BG      "SSC_info_bg"
 #define ORDER_KOMMENTAR  "ScalpScout"
-#define INFO_ZEILEN      11
+#define INFO_ZEILEN      12
 #define INFO_BREITE      540
 #define INFO_MAXZEICHEN  88
 #define PNL_ZEILEN       7
@@ -119,6 +133,23 @@ struct SignalZustand
    bool     aktiv;    // wartet auf Freigabe
    datetime zeit;     // Erzeugungszeit (TimeLocal)
    Plan     plan;     // berechneter Plan
+   double   slFix;    // fester Stop-Loss-Preis (Retest), 0 = ATR-basiert
+   double   tpFix;    // fester Take-Profit-Preis (Retest), 0 = ATR-basiert
+};
+
+// Wartendes Retest-Signal (nur eines zugleich, ein neues Signal ersetzt es)
+struct RetestZustand
+{
+   bool     aktiv;      // Signal wartet auf den Rücklauf
+   int      richtung;   // +1 Long, -1 Short
+   datetime kerzeZeit;  // Zeit der Signalkerze (M1, Shift 1)
+   double   kOpen;      // Signalkerze: Open
+   double   kHigh;      //              High
+   double   kLow;       //              Low
+   double   kClose;     //              Close
+   double   ziel;       // Zielpreis des Rücklaufs
+   double   atr;        // ATR zur Signalkerze
+   datetime verfall;    // ab dieser M1-Kerzenzeit ist das Signal verfallen
 };
 
 //+------------------------------------------------------------------+
@@ -169,6 +200,14 @@ double        g_impulsFaktor   = 1.8;  // Kerzenkörper muss größer sein als x
 double        g_volumenFaktor  = 1.5;  // Tick-Volumen muss größer sein als x * Durchschnitt
 int           g_breakoutKerzen = 10;   // Ausbruch über Hoch/Tief der letzten N Kerzen
 ENUM_MODUS    g_modusInput;            // Betriebsart laut Input (nach Tester-Regel) - Ziel von /reset
+ENUM_EINSTIEG g_einstieg       = EINSTIEG_RETEST; // Einstiegsart (Sofort/Retest)
+double        g_retestAnteil   = 0.4;  // Retest: Rücklauf in Anteil des Signalkerzen-Körpers
+int           g_retestMaxKerzen = 4;   // Retest: Verfall nach N weiteren M1-Kerzen
+double        g_retestTPCRV    = 1.8;  // Retest: TP = x * SL-Abstand
+RetestZustand g_rt;                    // wartendes Retest-Signal
+int           g_rtErreicht     = 0;    // Zähler seit Start: Rücklauf erreicht
+int           g_rtVerfallen    = 0;    //   Signal verfallen (kein Rücklauf rechtzeitig)
+int           g_rtAbgebrochen  = 0;    //   abgebrochen (Ausbruch gescheitert)
 string        g_fernInfo       = "";   // Liste der aus GlobalVariables geladenen Abweichungen
 long          g_cfgAutoMsg     = 0;    // Nachricht mit offener Rückfrage "Vollautomatik" (0 = keine)
 datetime      g_cfgAutoBis     = 0;    // Ablauf dieser Rückfrage (TimeLocal)
@@ -467,6 +506,16 @@ string ModusName(ENUM_MODUS m)
    return "?";
 }
 
+string EinstiegName(ENUM_EINSTIEG e)
+{
+   switch(e)
+   {
+      case EINSTIEG_SOFORT: return "Sofort";
+      case EINSTIEG_RETEST: return "Retest";
+   }
+   return "?";
+}
+
 // Name einer globalen Variable für Fern-Einstellungen (Konto + Magic)
 string FernSchluessel(string name)
 {
@@ -505,6 +554,10 @@ void FernAlleLoeschen()
    FernLoeschen("be");
    FernLoeschen("trailing");
    FernLoeschen("bericht");
+   FernLoeschen("einstieg");
+   FernLoeschen("retest");
+   FernLoeschen("retestk");
+   FernLoeschen("crv");
 }
 
 bool FernLesen(string name, double &v)
@@ -527,6 +580,10 @@ bool FernAusbruchAbw() { return g_breakoutKerzen != BreakoutKerzen; }
 bool FernModusAbw()    { return g_modus != g_modusInput; }
 bool FernBeAbw()       { return g_beAktiv != BE_Aktiv; }
 bool FernTrailAbw()    { return g_trailingAktiv != TrailingAktiv; }
+bool FernEinstiegAbw() { return g_einstieg != Einstieg; }
+bool FernRetestAbw()   { return MathAbs(g_retestAnteil - RetestAnteil) > 1e-9; }
+bool FernRetestKerzenAbw() { return g_retestMaxKerzen != RetestMaxKerzen; }
+bool FernCrvAbw()      { return MathAbs(g_retestTPCRV - RetestTP_CRV) > 1e-9; }
 
 // Tagesbericht-Uhrzeit laut Input in Minuten (-1 = aus/leer)
 int BerichtInputMin()
@@ -563,6 +620,10 @@ string FernAbweichungen()
    if(FernBeAbw())      ListeAnfuegen(r, "Break-even " + (g_beAktiv ? "an" : "aus"));
    if(FernTrailAbw())   ListeAnfuegen(r, "Trailing " + (g_trailingAktiv ? "an" : "aus"));
    if(FernBerichtAbw()) ListeAnfuegen(r, "Bericht " + BerichtZeitText(g_berichtMin));
+   if(FernEinstiegAbw()) ListeAnfuegen(r, "Einstieg " + EinstiegName(g_einstieg));
+   if(FernRetestAbw())  ListeAnfuegen(r, "Retest-Anteil " + DoubleToString(g_retestAnteil, 2));
+   if(FernRetestKerzenAbw()) ListeAnfuegen(r, "Retest-Kerzen " + IntegerToString(g_retestMaxKerzen));
+   if(FernCrvAbw())     ListeAnfuegen(r, "Retest-CRV " + DoubleToString(g_retestTPCRV, 2));
    return r;
 }
 
@@ -574,7 +635,9 @@ string WerteText()
           + MinutenText(g_endeMin) + ", Körper " + DoubleToString(g_impulsFaktor, 2) + ", Volumen "
           + DoubleToString(g_volumenFaktor, 2) + ", Ausbruch " + IntegerToString(g_breakoutKerzen)
           + ", Break-even " + (g_beAktiv ? "an" : "aus") + ", Trailing " + (g_trailingAktiv ? "an" : "aus")
-          + ", Bericht " + BerichtZeitText(g_berichtMin);
+          + ", Bericht " + BerichtZeitText(g_berichtMin)
+          + ", Einstieg " + EinstiegName(g_einstieg) + ", Retest-Anteil " + DoubleToString(g_retestAnteil, 2)
+          + ", Retest-Kerzen " + IntegerToString(g_retestMaxKerzen) + ", Retest-CRV " + DoubleToString(g_retestTPCRV, 2);
 }
 
 // Werte aus den Inputs setzen (Start und /reset); Modus nach Tester-Regel steht in g_modusInput
@@ -591,6 +654,10 @@ void FernInputsUebernehmen()
    g_beAktiv        = BE_Aktiv;
    g_trailingAktiv  = TrailingAktiv;
    g_berichtMin     = BerichtInputMin();
+   g_einstieg       = Einstieg;
+   g_retestAnteil   = RetestAnteil;
+   g_retestMaxKerzen = RetestMaxKerzen;
+   g_retestTPCRV    = RetestTP_CRV;
    g_modus          = g_modusInput;
 }
 
@@ -650,6 +717,27 @@ void FernLaden()
       if(v >= -1.0 - 1e-9 && v <= 1439.0 + 1e-9) g_berichtMin = (int)MathRound(v);
       else Print("ScalpScout: gespeicherter Wert 'bericht' ungültig - Input gilt.");
    }
+   if(FernLesen("einstieg", v))
+   {
+      if(MathAbs(v - (double)EINSTIEG_SOFORT) < 0.5)       g_einstieg = EINSTIEG_SOFORT;
+      else if(MathAbs(v - (double)EINSTIEG_RETEST) < 0.5)  g_einstieg = EINSTIEG_RETEST;
+      else Print("ScalpScout: gespeicherter Wert 'einstieg' ungültig - Input gilt.");
+   }
+   if(FernLesen("retest", v))
+   {
+      if(v >= 0.2 - 1e-9 && v <= 0.8 + 1e-9) g_retestAnteil = v;
+      else Print("ScalpScout: gespeicherter Wert 'retest' ungültig - Input gilt.");
+   }
+   if(FernLesen("retestk", v))
+   {
+      if(v >= 1.0 - 1e-9 && v <= 15.0 + 1e-9) g_retestMaxKerzen = (int)MathRound(v);
+      else Print("ScalpScout: gespeicherter Wert 'retestk' ungültig - Input gilt.");
+   }
+   if(FernLesen("crv", v))
+   {
+      if(v >= 1.0 - 1e-9 && v <= 4.0 + 1e-9) g_retestTPCRV = v;
+      else Print("ScalpScout: gespeicherter Wert 'crv' ungültig - Input gilt.");
+   }
    if(FernLesen("berichttag", v))        // kein Einstellwert: Tag des zuletzt gesendeten Berichts
       g_berichtTag = (datetime)(long)v;
    // Vollautomatik wird nie gespeichert: nach einem Neustart gilt dann der Input
@@ -693,6 +781,9 @@ void DiagZuruecksetzen()
    g_dgTrades         = 0;
    g_dgVerworfen      = 0;
    g_dgGrundAnz       = 0;
+   g_rtErreicht       = 0;
+   g_rtVerfallen      = 0;
+   g_rtAbgebrochen    = 0;
 }
 
 // Grund ohne wechselnde Zahlen, damit gleiche Gründe zusammengezählt werden
@@ -1000,7 +1091,9 @@ bool HandelErlaubt(string &grund, double atr, bool manuell = false)
 //| Plan berechnen: Preise, SL/TP, Lot                               |
 //+------------------------------------------------------------------+
 // lotVorgabe > 0: feste Lotgröße statt Risiko-Berechnung (Hand-Trade, Deckel = FernMaxLotObergrenze)
-bool BerechnePlan(int richtung, double atr, Plan &p, string &grund, double lotVorgabe = 0.0)
+// slFix/tpFix > 0: feste SL-/TP-Preise (Retest) statt ATR-Abstand; StopLevel wird geprüft, sonst false
+bool BerechnePlan(int richtung, double atr, Plan &p, string &grund, double lotVorgabe = 0.0,
+                  double slFix = 0.0, double tpFix = 0.0)
 {
    grund = "";
    RefreshRates();
@@ -1033,6 +1126,31 @@ bool BerechnePlan(int richtung, double atr, Plan &p, string &grund, double lotVo
    {
       p.sl = NormalizeDouble(p.preis + slDist, Digits);
       p.tp = NormalizeDouble(p.preis - tpDist, Digits);
+   }
+   // Feste Preise (Retest): StopLevel gegen den Gegenkurs prüfen (Long: Bid, Short: Ask)
+   if(slFix > 0.0)
+   {
+      double sf = NormalizeDouble(slFix, Digits);
+      double gr = (richtung > 0) ? NormalizeDouble(Bid - stopLvl, Digits) : NormalizeDouble(Ask + stopLvl, Digits);
+      if((richtung > 0 && sf > gr + Point / 2.0) || (richtung < 0 && sf < gr - Point / 2.0))
+      {
+         grund = "Retest: SL verletzt StopLevel (SL " + DoubleToString(sf, Digits) + ", Grenze "
+                 + DoubleToString(gr, Digits) + ", StopLevel " + DoubleToString(stopLvl / Point, 0) + " Pkt)";
+         return false;
+      }
+      p.sl = sf;
+   }
+   if(tpFix > 0.0)
+   {
+      double tf = NormalizeDouble(tpFix, Digits);
+      double gt = (richtung > 0) ? NormalizeDouble(Bid + stopLvl, Digits) : NormalizeDouble(Ask - stopLvl, Digits);
+      if((richtung > 0 && tf < gt - Point / 2.0) || (richtung < 0 && tf > gt + Point / 2.0))
+      {
+         grund = "Retest: TP verletzt StopLevel (TP " + DoubleToString(tf, Digits) + ", Grenze "
+                 + DoubleToString(gt, Digits) + ", StopLevel " + DoubleToString(stopLvl / Point, 0) + " Pkt)";
+         return false;
+      }
+      p.tp = tf;
    }
    p.slDist = MathAbs(p.preis - p.sl);
    p.tpDist = MathAbs(p.preis - p.tp);
@@ -1100,7 +1218,8 @@ bool BerechnePlan(int richtung, double atr, Plan &p, string &grund, double lotVo
 //+------------------------------------------------------------------+
 //| Order senden (mit Retry bei Requote)                             |
 //+------------------------------------------------------------------+
-bool OrderOeffnen(int richtung, double atr, string &grund, double lotVorgabe = 0.0)
+bool OrderOeffnen(int richtung, double atr, string &grund, double lotVorgabe = 0.0,
+                  double slFix = 0.0, double tpFix = 0.0)
 {
    int   cmd  = (richtung > 0) ? OP_BUY : OP_SELL;
    color clr  = (richtung > 0) ? clrLime : clrRed;
@@ -1122,7 +1241,7 @@ bool OrderOeffnen(int richtung, double atr, string &grund, double lotVorgabe = 0
 
       // Bei jedem Versuch frische Preise, SL/TP relativ zum aktuellen Preis
       Plan p;
-      if(!BerechnePlan(richtung, atr, p, grund, lotVorgabe))
+      if(!BerechnePlan(richtung, atr, p, grund, lotVorgabe, slFix, tpFix))
          return false;
 
       ResetLastError();
@@ -1276,6 +1395,7 @@ void AlleSchliessen(int &geschlossen, int &fehler)
    }
    g_gestoppt = true;
    SignalVerwerfen("Kill-Switch", "🛑 verworfen (Kill-Switch)");
+   RetestLoeschen("Kill-Switch");
    PanelLoeschen();
    g_sig.aktiv = false;
    HinweisSetzen("Kill-Switch: " + IntegerToString(geschlossen) + " Position(en) geschlossen, "
@@ -1403,9 +1523,12 @@ void UiAktualisieren()
    color dgFarbe = clrSilver;
    string dgText = DiagInfoText(dgFarbe);
    InfoZeile(9, dgText, dgFarbe);
+   color rtFarbe = clrSilver;
+   string rtText = RetestInfoText(rtFarbe);
+   InfoZeile(10, rtText, rtFarbe);
    string h = (g_hinweis == "") ? "Hinweis: -" :
               "Hinweis (" + TimeToString(g_hinweisZeit, TIME_MINUTES) + "): " + g_hinweis;
-   InfoZeile(10, h, (g_hinweis == "") ? clrSilver : clrGold);
+   InfoZeile(11, h, (g_hinweis == "") ? clrSilver : clrGold);
 }
 
 //+------------------------------------------------------------------+
@@ -1521,6 +1644,8 @@ bool SignalAusfuehren(bool perTelegram, string &ergebnis)
 
    int    richtung = g_sig.plan.richtung;
    double atr      = g_sig.plan.atr;
+   double slFix    = g_sig.slFix;
+   double tpFix    = g_sig.tpFix;
    long   msgId    = g_sigMsgId;
    string kopf     = g_tgKopf;
    g_sig.aktiv = false;      // gegen Doppelklick
@@ -1534,7 +1659,7 @@ bool SignalAusfuehren(bool perTelegram, string &ergebnis)
       DiagVerworfen(grund);
       ergebnis = grund;
    }
-   else if(!OrderOeffnen(richtung, atr, grund))
+   else if(!OrderOeffnen(richtung, atr, grund, 0.0, slFix, tpFix))
    {
       HinweisSetzen("Order fehlgeschlagen: " + grund);
       DiagVerworfen(grund);
@@ -1866,6 +1991,12 @@ string TgStatusText()
         + "Signal: Volumen &gt; " + DoubleToString(g_volumenFaktor, 2) + "×Ø" + FernMarke(FernVolumenAbw()) + "\n"
         + "Signal: Ausbruch über " + IntegerToString(g_breakoutKerzen) + " Kerzen" + FernMarke(FernAusbruchAbw())
         + ", Trendfilter " + (TrendFilterAktiv ? "an (EMA " + IntegerToString(EMA_Periode) + ")" : "aus") + "\n"
+        + "Einstieg: " + EinstiegName(g_einstieg) + FernMarke(FernEinstiegAbw()) + "\n"
+        + "Retest: Rücklauf " + DoubleToString(g_retestAnteil, 2) + "×Körper" + FernMarke(FernRetestAbw())
+        + ", max " + IntegerToString(g_retestMaxKerzen) + " Kerzen" + FernMarke(FernRetestKerzenAbw())
+        + ", SL-Puffer " + DoubleToString(RetestSLPufferATR, 2) + "×ATR, TP " + DoubleToString(g_retestTPCRV, 2)
+        + "×SL" + FernMarke(FernCrvAbw()) + "\n"
+        + (g_rt.aktiv ? "Retest wartet: " + RetestWartetText() + "\n" : "")
         + "Break-even: " + (g_beAktiv ? "an" : "aus") + FernMarke(FernBeAbw()) + ", Trailing: "
         + (g_trailingAktiv ? "an" : "aus") + FernMarke(FernTrailAbw()) + "\n"
         + "Tagesbericht: " + BerichtZeitText(g_berichtMin) + FernMarke(FernBerichtAbw()) + "\n"
@@ -1928,6 +2059,11 @@ string TgHilfeText()
         + "/koerper X - Kerzenkörper-Faktor (0.5-4.0), jetzt " + DoubleToString(g_impulsFaktor, 2) + "\n"
         + "/volumen X - Volumen-Faktor (0.8-4.0), jetzt " + DoubleToString(g_volumenFaktor, 2) + "\n"
         + "/ausbruch N - Ausbruch über N Kerzen (2-50), jetzt " + IntegerToString(g_breakoutKerzen) + "\n"
+        + "/einstieg retest|sofort - Einstiegsart, jetzt " + EinstiegName(g_einstieg) + "\n"
+        + "/retest X - Retest: Rücklauf in Anteil des Signalkerzen-Körpers (0.2-0.8), jetzt "
+        + DoubleToString(g_retestAnteil, 2) + "\n"
+        + "/retestkerzen N - Retest verfällt nach N Kerzen (1-15), jetzt " + IntegerToString(g_retestMaxKerzen) + "\n"
+        + "/crv X - Retest: TP = x × SL-Abstand (1.0-4.0), jetzt " + DoubleToString(g_retestTPCRV, 2) + "\n"
         + "/be an|aus - Break-even, jetzt " + (g_beAktiv ? "an" : "aus") + "\n"
         + "/trailing an|aus - Trailing-Stop, jetzt " + (g_trailingAktiv ? "an" : "aus") + "\n"
         + "/bericht [HH:MM|aus] - Tagesbericht sofort bzw. Uhrzeit setzen, jetzt " + BerichtZeitText(g_berichtMin) + "\n"
@@ -1977,6 +2113,18 @@ string TgDiagText()
    }
    if(best >= 0)
       s += "\nHäufigster Grund: " + HtmlEscape(g_dgGrund[best]) + " (" + IntegerToString(g_dgGrundN[best]) + "×)";
+   s += "\nEinstieg: " + EinstiegName(g_einstieg);
+   if(g_einstieg == EINSTIEG_RETEST)
+      s += " (Rücklauf " + DoubleToString(g_retestAnteil, 2) + "×Körper, max " + IntegerToString(g_retestMaxKerzen)
+         + " Kerzen, SL-Puffer " + DoubleToString(RetestSLPufferATR, 2) + "×ATR, TP " + DoubleToString(g_retestTPCRV, 2) + "×SL)";
+   if(g_rt.aktiv)
+      s += "\nRetest wartet: " + RetestWartetText() + ", Abbruch bei "
+         + ((g_rt.richtung > 0) ? "Bid unter " + DoubleToString(g_rt.kLow, Digits)
+                                : "Bid über " + DoubleToString(g_rt.kHigh, Digits));
+   else
+      s += "\nRetest wartet: kein Signal";
+   s += "\nRetest seit Start: " + IntegerToString(g_rtErreicht) + " erreicht, " + IntegerToString(g_rtVerfallen)
+      + " verfallen, " + IntegerToString(g_rtAbgebrochen) + " abgebrochen (Ausbruch gescheitert)";
    return s;
 }
 
@@ -2287,7 +2435,8 @@ bool TgBereichOK(string cmd, string arg, double mn, double mx, int dez, string e
    return false;
 }
 
-// Einstellbefehle /risiko /maxlot /limit /zeit /koerper /volumen /ausbruch. true = Befehl erkannt.
+// Einstellbefehle /risiko /maxlot /limit /zeit /koerper /volumen /ausbruch /einstieg /retest /retestkerzen /crv.
+// true = Befehl erkannt.
 bool TgEinstellung(string cmd, string arg)
 {
    double w = 0.0;
@@ -2401,6 +2550,68 @@ bool TgEinstellung(string cmd, string arg)
       TgGeaendert("Ausbruch", alt, IntegerToString(g_breakoutKerzen) + " Kerzen");
       return true;
    }
+   if(cmd == "/einstieg")
+   {
+      ENUM_EINSTIEG neu = g_einstieg;
+      if(arg == "retest")
+         neu = EINSTIEG_RETEST;
+      else if(arg == "sofort")
+         neu = EINSTIEG_SOFORT;
+      else
+      {
+         TgNachrichtSenden("⚠️ /einstieg: retest oder sofort erwartet. Aktuell: " + EinstiegName(g_einstieg) + ".", "");
+         return true;
+      }
+      if(neu == g_einstieg)
+      {
+         TgNachrichtSenden("Einstiegsart ist bereits: " + EinstiegName(g_einstieg), "");
+         return true;
+      }
+      alt = EinstiegName(g_einstieg);
+      g_einstieg = neu;
+      FernSpeichern("einstieg", (double)g_einstieg);
+      if(g_einstieg != EINSTIEG_RETEST)
+         RetestLoeschen("Einstiegsart auf Sofort gestellt");
+      TgGeaendert("Einstieg", alt, EinstiegName(g_einstieg));
+      return true;
+   }
+   if(cmd == "/retest")
+   {
+      if(!TgBereichOK(cmd, arg, 0.2, 0.8, 2, " (Anteil des Signalkerzen-Körpers)", w))
+         return true;
+      w   = NormalizeDouble(w, 2);
+      alt = DoubleToString(g_retestAnteil, 2);
+      g_retestAnteil = w;
+      FernSpeichern("retest", g_retestAnteil);
+      TgGeaendert("Retest-Anteil", alt, DoubleToString(g_retestAnteil, 2) + " (gilt ab dem nächsten Signal)");
+      return true;
+   }
+   if(cmd == "/retestkerzen")
+   {
+      if(!TgBereichOK(cmd, arg, 1.0, 15.0, 0, " Kerzen (ganze Zahl)", w))
+         return true;
+      if(MathAbs(w - MathRound(w)) > 1e-9)
+      {
+         TgNachrichtSenden("⚠️ /retestkerzen: ganze Zahl von 1 bis 15 erwartet.", "");
+         return true;
+      }
+      alt = IntegerToString(g_retestMaxKerzen) + " Kerzen";
+      g_retestMaxKerzen = (int)MathRound(w);
+      FernSpeichern("retestk", g_retestMaxKerzen);
+      TgGeaendert("Retest-Kerzen", alt, IntegerToString(g_retestMaxKerzen) + " Kerzen (gilt ab dem nächsten Signal)");
+      return true;
+   }
+   if(cmd == "/crv")
+   {
+      if(!TgBereichOK(cmd, arg, 1.0, 4.0, 1, " (×SL-Abstand, nur Retest-TP)", w))
+         return true;
+      w   = NormalizeDouble(w, 2);
+      alt = DoubleToString(g_retestTPCRV, 2);
+      g_retestTPCRV = w;
+      FernSpeichern("crv", g_retestTPCRV);
+      TgGeaendert("Retest-CRV", alt, DoubleToString(g_retestTPCRV, 2));
+      return true;
+   }
    return false;
 }
 
@@ -2475,6 +2686,8 @@ void TgReset()
    FernAlleLoeschen();
    ENUM_MODUS alt = g_modus;
    FernInputsUebernehmen();
+   if(g_einstieg != EINSTIEG_RETEST)
+      RetestLoeschen("Reset");
    if(g_berichtMin >= 0 && TimeHour(TimeCurrent()) * 60 + TimeMinute(TimeCurrent()) >= g_berichtMin)
       g_berichtTag = (datetime)((long)TimeCurrent() / 86400 * 86400);   // heute nicht nachträglich senden
    if(alt != g_modus && g_modus != MANUELLE_FREIGABE && g_sig.aktiv)
@@ -3180,6 +3393,213 @@ void TelegramStarten()
 }
 
 //+------------------------------------------------------------------+
+//| Retest-Einstieg: Signal merken, Rücklauf abwarten, ausführen     |
+//+------------------------------------------------------------------+
+// Verbleibende M1-Kerzen bis zum Verfall (zeitbasiert ab dem Beginn der Kerze, in der das Signal entstand)
+int RetestRestKerzen()
+{
+   int rest = (int)(((long)g_rt.verfall - (long)iTime(Symbol(), PERIOD_M1, 0)) / 60);
+   return (rest < 0) ? 0 : rest;
+}
+
+// "LONG bis 1.12345 (noch 3 Kerzen)"
+string RetestWartetText()
+{
+   int rest = RetestRestKerzen();
+   return ((g_rt.richtung > 0) ? "LONG" : "SHORT") + " bis " + DoubleToString(g_rt.ziel, Digits)
+          + " (noch " + IntegerToString(rest) + ((rest == 1) ? " Kerze)" : " Kerzen)");
+}
+
+// Chart-Zeile zum Einstieg
+string RetestInfoText(color &clr)
+{
+   if(g_rt.aktiv)
+   {
+      clr = clrAqua;
+      return "Retest wartet: " + RetestWartetText();
+   }
+   clr = clrSilver;
+   if(g_einstieg == EINSTIEG_RETEST)
+      return "Einstieg: Retest (Rücklauf " + DoubleToString(g_retestAnteil, 2) + ", max " + IntegerToString(g_retestMaxKerzen)
+             + " Kerzen, CRV " + DoubleToString(g_retestTPCRV, 2) + ") - kein Signal wartet";
+   return "Einstieg: Sofort (direkt nach der Signalkerze)";
+}
+
+// Wartendes Retest-Signal ohne Zählung entfernen (Moduswechsel der Einstiegsart, Reset, Kill-Switch, Ersetzen)
+void RetestLoeschen(string grund)
+{
+   if(!g_rt.aktiv)
+      return;
+   g_rt.aktiv = false;
+   Print("ScalpScout: wartendes Retest-Signal gelöscht - ", grund);
+}
+
+// Neues Signal auf der geschlossenen Kerze (Shift 1) als wartendes Retest-Signal merken
+void RetestMerken(int sig, double atr)
+{
+   g_rt.aktiv     = true;
+   g_rt.richtung  = sig;
+   g_rt.kerzeZeit = iTime(Symbol(), PERIOD_M1, 1);
+   g_rt.kOpen     = iOpen(Symbol(), PERIOD_M1, 1);
+   g_rt.kHigh     = iHigh(Symbol(), PERIOD_M1, 1);
+   g_rt.kLow      = iLow(Symbol(), PERIOD_M1, 1);
+   g_rt.kClose    = iClose(Symbol(), PERIOD_M1, 1);
+   g_rt.atr       = atr;
+   // Zielpreis: Long = Close - Anteil * Körper, Short = Close + Anteil * Körper
+   double koerper = MathAbs(g_rt.kClose - g_rt.kOpen);
+   g_rt.ziel      = NormalizeDouble(g_rt.kClose - sig * g_retestAnteil * koerper, Digits);
+   // Die laufende Kerze zählt als erste der N weiteren Kerzen
+   g_rt.verfall   = (datetime)((long)iTime(Symbol(), PERIOD_M1, 0) + (long)g_retestMaxKerzen * 60);
+   Print("ScalpScout: Retest-Signal ", (sig > 0 ? "LONG" : "SHORT"), " gemerkt - Signalkerze ",
+         TimeToString(g_rt.kerzeZeit, TIME_DATE | TIME_MINUTES), " O ", DoubleToString(g_rt.kOpen, Digits),
+         " H ", DoubleToString(g_rt.kHigh, Digits), " L ", DoubleToString(g_rt.kLow, Digits),
+         " C ", DoubleToString(g_rt.kClose, Digits), ", Ziel ", DoubleToString(g_rt.ziel, Digits),
+         ", Verfall nach ", g_retestMaxKerzen, " Kerzen");
+}
+
+// Rücklauf erreicht: Filter erneut prüfen, feste SL/TP-Preise bilden, je nach Modus ausführen/melden/zur Freigabe zeigen
+void RetestAusloesen()
+{
+   int    richtung = g_rt.richtung;
+   double atr      = g_rt.atr;
+   double kHigh    = g_rt.kHigh;
+   double kLow     = g_rt.kLow;
+   string txt      = (richtung > 0) ? "LONG" : "SHORT";
+   g_rt.aktiv = false;                 // zuerst löschen: nie doppelt ausführen
+   g_rtErreicht++;
+   g_dgRichtung = richtung;
+
+   RefreshRates();
+   string grund = "";
+   if(!HandelErlaubt(grund, atr))
+   {
+      g_dgErgebnis = "Retest " + txt + " erreicht, aber blockiert: " + grund;
+      DiagVerworfen(grund);
+      HinweisSetzen("Retest " + txt + " blockiert: " + grund);
+      return;
+   }
+
+   // SL hinter dem Extrem der Signalkerze, TP = CRV x SL-Abstand ab dem tatsächlichen Einstiegskurs
+   double puffer = RetestSLPufferATR * atr;
+   double sl, tp, einstieg;
+   if(richtung > 0)
+   {
+      einstieg = Ask;
+      sl = NormalizeDouble(kLow - puffer, Digits);
+      tp = NormalizeDouble(einstieg + g_retestTPCRV * (einstieg - sl), Digits);
+   }
+   else
+   {
+      einstieg = Bid;
+      sl = NormalizeDouble(kHigh + puffer + (Ask - Bid), Digits);
+      tp = NormalizeDouble(einstieg - g_retestTPCRV * (sl - einstieg), Digits);
+   }
+   if((richtung > 0 && sl >= einstieg) || (richtung < 0 && sl <= einstieg) || tp <= 0.0)
+   {
+      grund = "Retest: SL liegt auf der falschen Seite des Einstiegs";
+      g_dgErgebnis = "Retest " + txt + " erreicht, aber ohne Trade: " + grund;
+      DiagVerworfen(grund);
+      HinweisSetzen("Retest " + txt + " ohne Trade: " + grund);
+      return;
+   }
+
+   Plan p;
+   if(!BerechnePlan(richtung, atr, p, grund, 0.0, sl, tp))
+   {
+      g_dgErgebnis = "Retest " + txt + " erreicht, aber ohne Trade: " + grund;
+      DiagVerworfen(grund);
+      HinweisSetzen("Retest " + txt + " ohne Trade: " + grund);
+      return;
+   }
+   g_dgErgebnis = "Retest " + txt + " erreicht";
+
+   string meldung = "ScalpScout " + Symbol() + " " + txt + " (Retest) @" + DoubleToString(p.preis, Digits)
+                    + " SL " + DoubleToString(p.sl, Digits) + " TP " + DoubleToString(p.tp, Digits)
+                    + " Lot " + DoubleToString(p.lot, 2) + " " + KostenText(p.spreadPkt, p.kommPkt)
+                    + " CRV 1:" + DoubleToString(p.crv, 2);
+
+   switch(g_modus)
+   {
+      case NUR_SIGNALE:
+         Melden(meldung + " (nur Signal)");
+         HinweisSetzen("Retest " + txt + " gemeldet (kein Trade)");
+         TgNachrichtSenden(TgSignalText(p) + "\n🔁 Retest erreicht - nur Signal, kein Trade", "");
+         break;
+
+      case VOLLAUTOMATIK:
+         if(OrderOeffnen(richtung, atr, grund, 0.0, sl, tp))
+         {
+            Melden(meldung + " - ausgeführt");
+            HinweisSetzen("Auto-Trade " + txt + " (Retest) eröffnet");
+            TgNachrichtSenden(TgSignalText(p) + "\n✅ automatisch ausgeführt (Retest): #" + IntegerToString(g_orderTicket)
+                              + " @" + DoubleToString(g_orderPreis, Digits), "");
+         }
+         else
+         {
+            g_dgErgebnis = "Retest " + txt + " erreicht, Order fehlgeschlagen: " + grund;
+            DiagVerworfen(grund);
+            HinweisSetzen("Auto-Trade " + txt + " (Retest) fehlgeschlagen: " + grund);
+         }
+         break;
+
+      case MANUELLE_FREIGABE:
+         if(g_sig.aktiv)
+            SignalVerwerfen("durch neues Signal ersetzt", "⌛ ersetzt durch neues Signal");
+         g_sig.aktiv = true;
+         g_sig.zeit  = TimeLocal();
+         g_sig.plan  = p;
+         g_sig.slFix = sl;
+         g_sig.tpFix = tp;
+         g_sigId     = TgNeueSignalId();
+         g_sigMsgId  = 0;
+         g_tgKopf    = TgSignalKopf(p);
+         PanelZeigen();
+         Melden(meldung + " - Freigabe im Chart nötig (" + IntegerToString(SignalGueltigSek) + " s)");
+         g_sigMsgId  = TgNachrichtSenden(TgSignalText(p) + "\n🔁 Retest erreicht\n⏱ gültig " + IntegerToString(SignalGueltigSek) + " s",
+                                         TgTastatur(g_sigId));
+         break;
+   }
+}
+
+// Bei jedem Tick: Verfall, gescheiterter Ausbruch und Erreichen des Zielpreises prüfen
+void RetestPruefen()
+{
+   if(!g_rt.aktiv)
+      return;
+   if(g_einstieg != EINSTIEG_RETEST)
+   {
+      RetestLoeschen("Einstiegsart nicht mehr Retest");
+      return;
+   }
+
+   // Verfall (zuerst: in der Kerze, in der das Signal verfällt, wird nicht mehr eingestiegen)
+   if(iTime(Symbol(), PERIOD_M1, 0) >= g_rt.verfall)
+   {
+      g_rtVerfallen++;
+      g_rt.aktiv = false;
+      DiagVerworfen("Retest verfallen (kein Rücklauf innerhalb " + IntegerToString(g_retestMaxKerzen) + " Kerzen)");
+      HinweisSetzen("Retest " + ((g_rt.richtung > 0) ? "LONG" : "SHORT") + " verfallen (kein Rücklauf)");
+      return;
+   }
+
+   RefreshRates();
+
+   // Ausbruch gescheitert: Kurs (Bid, wie im Chart) durchbricht das Extrem der Signalkerze auf der Gegenseite
+   if((g_rt.richtung > 0 && Bid < g_rt.kLow) || (g_rt.richtung < 0 && Bid > g_rt.kHigh))
+   {
+      g_rtAbgebrochen++;
+      g_rt.aktiv = false;
+      DiagVerworfen("Retest abgebrochen (Ausbruch gescheitert)");
+      HinweisSetzen("Retest " + ((g_rt.richtung > 0) ? "LONG" : "SHORT") + " abgebrochen (Ausbruch gescheitert)");
+      return;
+   }
+
+   // Rücklauf erreicht: Long kauft zum Ask, Short verkauft zum Bid
+   if((g_rt.richtung > 0 && Ask <= g_rt.ziel) || (g_rt.richtung < 0 && Bid >= g_rt.ziel))
+      RetestAusloesen();
+}
+
+//+------------------------------------------------------------------+
 //| Signal-Logik auf geschlossener M1-Kerze (Shift 1)                |
 //+------------------------------------------------------------------+
 // Rückgabe: +1 Long, -1 Short, 0 kein Signal
@@ -3249,11 +3669,26 @@ void NeueKerzeAuswerten()
    g_dgSignale++;
    g_dgRichtung = sig;
 
+   if(g_rt.aktiv)      // ein neues Signal ersetzt ein wartendes Retest-Signal
+   {
+      DiagVerworfen("Retest durch neues Signal ersetzt");
+      RetestLoeschen("durch neues Signal ersetzt");
+   }
+
    if(!HandelErlaubt(grund, atr))
    {
       g_dgErgebnis = "Signal " + txt + " erkannt, aber blockiert: " + grund;
       DiagVerworfen(grund);
       HinweisSetzen("Signal " + txt + " blockiert: " + grund);
+      return;
+   }
+
+   if(g_einstieg == EINSTIEG_RETEST)
+   {
+      // Nicht sofort handeln: Signal merken und auf den Rücklauf warten (Ausführung in RetestPruefen)
+      RetestMerken(sig, atr);
+      g_dgErgebnis = "Signal " + txt + " erkannt, Retest wartet bis " + DoubleToString(g_rt.ziel, Digits);
+      HinweisSetzen("Retest-Signal " + txt + " wartet bis " + DoubleToString(g_rt.ziel, Digits));
       return;
    }
 
@@ -3302,6 +3737,8 @@ void NeueKerzeAuswerten()
          g_sig.aktiv = true;
          g_sig.zeit  = TimeLocal();
          g_sig.plan  = p;
+         g_sig.slFix = 0.0;
+         g_sig.tpFix = 0.0;
          g_sigId     = TgNeueSignalId();
          g_sigMsgId  = 0;
          g_tgKopf    = TgSignalKopf(p);
@@ -3335,6 +3772,13 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
+   if(RetestAnteil < 0.2 || RetestAnteil > 0.8 || RetestMaxKerzen < 1 || RetestMaxKerzen > 15 ||
+      RetestSLPufferATR < 0.0 || RetestTP_CRV < 1.0 || RetestTP_CRV > 4.0)
+   {
+      Alert("ScalpScout: Retest-Eingaben ungültig (RetestAnteil 0.2-0.8, RetestMaxKerzen 1-15, RetestSLPufferATR >= 0, RetestTP_CRV 1.0-4.0).");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
    string bz = TagesberichtZeit;
    StringTrimLeft(bz);
    StringTrimRight(bz);
@@ -3365,6 +3809,9 @@ int OnInit()
    DiagZuruecksetzen();
 
    g_sig.aktiv = false;
+   g_sig.slFix = 0.0;
+   g_sig.tpFix = 0.0;
+   g_rt.aktiv  = false;
    g_gestoppt  = false;
    g_hinweis   = "";
    g_histAnzahl = -1;
@@ -3401,7 +3848,8 @@ int OnInit()
    if(!IsTesting())
       EventSetTimer(1);
 
-   Print("ScalpScout gestartet: ", Symbol(), ", Modus ", ModusText(), ", MaxLot ", DoubleToString(g_maxLot, 2),
+   Print("ScalpScout gestartet: ", Symbol(), ", Modus ", ModusText(), ", Einstieg ", EinstiegName(g_einstieg),
+         ", MaxLot ", DoubleToString(g_maxLot, 2),
          ", Risiko ", DoubleToString(g_risiko, 1), " %, Digits ", Digits, ", Point ", DoubleToString(Point, Digits));
    return INIT_SUCCEEDED;
 }
@@ -3427,6 +3875,7 @@ void OnTick()
       g_letzteKerze = kerze;
       NeueKerzeAuswerten();
    }
+   RetestPruefen();           // wartendes Retest-Signal: Verfall, Abbruch oder Einstieg
 
    if(g_ui)
    {
