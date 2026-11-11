@@ -11,8 +11,13 @@ Der EA ist symbolneutral (EURUSD, GBPUSD, XAUUSD, DAX/US30 und andere, auch mit 
 | `MQL4/Experts/ScalpScout.mq4` | der Expert Advisor mit der Ausbruchs-Strategie (UTF-8 mit BOM, damit Umlaute in MetaEditor stimmen) |
 | `MQL4/Experts/ScalpScoutTrend.mq4` | zweiter, eigenständiger EA mit der Trend-Pullback-Strategie (AVWAP), siehe Abschnitt „Zweiter EA: ScalpScout Trend“ |
 | `MQL4/Experts/ScalpScoutAsia.mq4` | dritter, eigenständiger EA: Opening-Range-Breakout auf USDJPY zur Tokio- und London-Eröffnung inkl. Folge-Scalps, siehe Abschnitt „Dritter EA: ScalpScout Asia“ |
+| `MQL4/Include/ScalpScout/Kern.mqh` | gemeinsame Funktionen **aller drei** EAs (Fehlertexte, Lot/Kosten, Verlustserie, Chart-Objekte, Panel, Telegram-Grundlagen und JSON) |
+| `MQL4/Include/ScalpScout/Fern.mqh` | gemeinsame Funktionen von **ScalpScout und ScalpScout Asia** (Telegram-Fernsteuerung, gespeicherte Fern-Einstellungen, Tagesbericht, Positionsverwaltung); ScalpScout Trend hat eine eigene Umsetzung |
+| `kompilieren.sh` | kompiliert alle EAs unter Linux mit Wine und MetaEditor und zeigt Fehler/Warnungen (siehe „Kompilieren unter Linux“) |
 | `README.md` | diese Anleitung |
 | `.gitignore` | ignoriert `*.ex4` und `*.log` |
+
+**Wichtig:** Die EAs binden die Dateien aus `MQL4/Include/ScalpScout/` ein. Ohne diesen Ordner lässt sich keiner der EAs kompilieren. Eine Änderung in `Kern.mqh` wirkt auf alle drei EAs, eine Änderung in `Fern.mqh` auf ScalpScout und ScalpScout Asia; danach alle betroffenen EAs neu kompilieren.
 
 ## So arbeitet er
 
@@ -30,7 +35,7 @@ Der EA ist symbolneutral (EURUSD, GBPUSD, XAUUSD, DAX/US30 und andere, auch mit 
 ## Installation in MT4
 
 1. In MT4: **Datei → Datenordner öffnen**.
-2. `ScalpScout.mq4` nach `MQL4/Experts/` kopieren.
+2. `ScalpScout.mq4` nach `MQL4/Experts/` kopieren und den Ordner `ScalpScout` aus `MQL4/Include/` nach `MQL4/Include/` (es entsteht `MQL4/Include/ScalpScout/Kern.mqh` und `Fern.mqh`).
 3. MetaEditor öffnen (**F4**), Datei öffnen und mit **F7** kompilieren. Es darf kein Fehler erscheinen (Datei `ScalpScout.ex4` entsteht).
 4. In MT4 im Navigator mit Rechtsklick **Aktualisieren**.
 5. Oben in der Symbolleiste **„Algo-Trading“ (AutoTrading)** einschalten (Knopf muss grün sein).
@@ -192,7 +197,7 @@ Der EA ist eine **eigene Datei** (`ScalpScoutTrend.mq4`) und läuft unabhängig 
 
 **Empfohlene Symbole:** Index-CFD auf den S&P 500 (z. B. US500/SPX500, Name beim Broker nachsehen) oder `EURUSD.ecn`. Welche Kosten (Spread, Kommission) im Verhältnis zu den Zielen anfallen, entscheidet über das CRV und damit darüber, wie oft überhaupt gehandelt wird.
 
-**Installation:** identisch zu `ScalpScout` (Datei nach `MQL4/Experts/`, mit F7 kompilieren, Navigator aktualisieren, AutoTrading an, EA auf einen M1-Chart ziehen, „Live-Handel erlauben“). Die Info-Box zeigt zusätzlich „Strategie: Trend-Pullback | Trend | AVWAP | Ziel“ und den Grund der letzten Prüfung.
+**Installation:** identisch zu `ScalpScout` (Datei nach `MQL4/Experts/`, Ordner `MQL4/Include/ScalpScout/` nach `MQL4/Include/`, mit F7 kompilieren, Navigator aktualisieren, AutoTrading an, EA auf einen M1-Chart ziehen, „Live-Handel erlauben“). Die Info-Box zeigt zusätzlich „Strategie: Trend-Pullback | Trend | AVWAP | Ziel“ und den Grund der letzten Prüfung.
 
 **Telegram:** Alle Nachrichten dieses EAs beginnen mit `[Trend]`. **Beide EAs nie mit demselben Telegram-Bot gleichzeitig betreiben**, sonst stehlen sie sich gegenseitig die Updates (JA/NEIN-Knöpfe kommen beim falschen EA an oder gehen verloren). Dafür bei @BotFather mit `/newbot` einen zweiten Bot anlegen und dessen Token in `ScalpScoutTrend` eintragen.
 
@@ -300,7 +305,7 @@ Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE
 
 **Einrichtung:**
 
-1. `ScalpScoutAsia.mq4` nach `MQL4/Experts/` kopieren, mit F7 kompilieren (wie bei den anderen EAs).
+1. `ScalpScoutAsia.mq4` nach `MQL4/Experts/` und den Ordner `MQL4/Include/ScalpScout/` nach `MQL4/Include/` kopieren, mit F7 kompilieren (wie bei den anderen EAs).
 2. **USDJPY-M1-Chart** öffnen. **Symbolnamen beim Broker prüfen** (z. B. `USDJPY.ecn`); der EA arbeitet mit dem Symbol des Charts. Der M1-Verlauf muss mindestens bis zum Range-Beginn des Tages reichen (Chart nach oben scrollen, damit MT4 Historie lädt).
 3. **Eigenen Telegram-Bot** anlegen (@BotFather, `/newbot`) und dessen Token eintragen. **Pro EA ein Bot**, sonst stehlen sich die EAs gegenseitig die Updates (HTTP 409, JA/NEIN-Knöpfe kommen beim falschen EA an). Nachrichten beginnen mit `[Asia]`.
 4. Beim ersten Start `MANUELLE_FREIGABE` oder `NUR_SIGNALE` lassen.
@@ -327,11 +332,23 @@ Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE
 - Verlustserie: Wird aus der Konto-Historie gelesen; die Historie muss in MT4 (Reiter „Kontohistorie“, Zeitraum „Gesamte Historie“) verfügbar sein.
 - Telegram nutzt `WebRequest` und blockiert kurz (bis 5 s Zeitlimit je Anfrage). Abfragen laufen nur im Timer, Sendungen nur bei Ereignissen (Signal, Knopfdruck, Schließung). Nach einem Netzfehler pausiert Telegram 10 Sekunden. Im Strategietester ist Telegram aus.
 - Emoji in den Nachrichten sind im Quelltext direkt eingetragen (Datei ist UTF-8 mit BOM). Falls MetaEditor sie nicht korrekt lädt, erscheinen im Telegram nur Platzhalter; die Funktion bleibt davon unberührt.
-- Der Code wurde ohne Compiler geschrieben und von Hand geprüft. Bitte einmal in MetaEditor kompilieren und Warnungen/Fehler zurückmelden.
+- Kompiliert mit MetaEditor (MT4, unter Wine) am 2026-11-11: alle drei EAs `0 errors, 0 warnings`. Ein Lauf im Strategietester oder auf einem Konto steht noch aus.
+
+## Kompilieren unter Linux
+
+Voraussetzung: Wine und ein MT4 in einem eigenen Wine-Prefix `~/.wine-mt4`:
+
+```bash
+sudo pacman -S --needed wine
+curl -LO https://download.mql5.com/cdn/web/metaquotes.software.corp/mt4/mt4setup.exe
+WINEPREFIX=$HOME/.wine-mt4 wine mt4setup.exe /auto
+```
+
+Danach im Repo `./kompilieren.sh` (alle EAs) oder `./kompilieren.sh ScalpScoutAsia.mq4` (einer). Das Script ruft `metaeditor.exe /compile` mit `MQL4/` des Repos als Include-Pfad auf, zeigt je EA die Ergebniszeile und die Fehler/Warnungen und endet mit Code 1, wenn eine `.ex4` fehlt. Die `.ex4`- und `.log`-Dateien landen neben den Quellen und sind in `.gitignore`.
 
 ## Fahrplan nächste Schritte
 
-1. In MetaEditor kompilieren (F7), Fehler/Warnungen beheben.
+1. ~~Kompilieren~~ erledigt (siehe oben).
 2. Backtest mit „Jeder Tick“ auf EURUSD und XAUUSD, mit realistischem Spread; Parameter nicht überoptimieren.
 3. **Demokonto**, Modus `NUR_SIGNALE`, mindestens 2 Wochen: Passen Signale zum Marktgefühl? Wie oft blockiert der Spreadfilter?
 4. Demokonto mit `MANUELLE_FREIGABE`, Push aktivieren, Journal auswerten (Trefferquote, CRV, Spread-Kosten).
