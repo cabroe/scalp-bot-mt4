@@ -347,6 +347,18 @@ WINEPREFIX=$HOME/.wine-mt4 wine mt4setup.exe /auto
 
 Danach im Repo `./kompilieren.sh` (alle EAs) oder `./kompilieren.sh ScalpScoutAsia.mq4` (einer). Das Script ruft `metaeditor.exe /compile` mit `MQL4/` des Repos als Include-Pfad auf, zeigt je EA die Ergebniszeile und die Fehler/Warnungen und endet mit Code 1, wenn eine `.ex4` fehlt. Die `.ex4`- und `.log`-Dateien landen neben den Quellen und sind in `.gitignore`.
 
+## Backtest unter Linux
+
+Voraussetzung wie oben, dazu einmal MT4 mit `wine terminal.exe /portable` starten, ein Demokonto anlegen (z. B. MetaQuotes-Demo) und im Historienzentrum (F2) die M1-Daten der Symbole laden. Danach MT4 schließen und:
+
+```bash
+./backtest.py ScalpScoutAsia USDJPY 2026.08.01 2026.10.31 12 FolgeTradesAktiv=false --name Asia_ohneFolge
+```
+
+Argumente: EA, Symbol, Von, Bis, Spread in Punkten, danach beliebig viele `Input=Wert`. Die `.set`-Datei entsteht aus den Input-Standardwerten des EAs. MT4 startet den Tester selbst („Jeder Tick“, M1) und schließt sich danach. Der Bericht wird nach `tester-berichte/` kopiert (nicht im Repo), die Kennzahlen stehen auf der Konsole.
+
+Grenzen: Mit reinen M1-Daten erreicht „Jeder Tick“ nur **25 % Modellierungsqualität** (Ticks innerhalb einer Minute sind geschätzt). Der Tester zieht **keine Kommission** ab; bei ECN-Konten die Kommission in den Spread einrechnen.
+
 ## Fahrplan nächste Schritte
 
 1. ~~Kompilieren~~ erledigt (siehe oben).
