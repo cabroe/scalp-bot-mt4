@@ -11,8 +11,13 @@ Der EA ist symbolneutral (EURUSD, GBPUSD, XAUUSD, DAX/US30 und andere, auch mit 
 | `MQL4/Experts/ScalpScout.mq4` | der Expert Advisor mit der Ausbruchs-Strategie (UTF-8 mit BOM, damit Umlaute in MetaEditor stimmen) |
 | `MQL4/Experts/ScalpScoutTrend.mq4` | zweiter, eigenständiger EA mit der Trend-Pullback-Strategie (AVWAP), siehe Abschnitt „Zweiter EA: ScalpScout Trend“ |
 | `MQL4/Experts/ScalpScoutAsia.mq4` | dritter, eigenständiger EA: Opening-Range-Breakout auf USDJPY zur Tokio- und London-Eröffnung inkl. Folge-Scalps, siehe Abschnitt „Dritter EA: ScalpScout Asia“ |
+| `MQL4/Include/ScalpScout/Kern.mqh` | gemeinsame Funktionen **aller drei** EAs (Fehlertexte, Lot/Kosten, Verlustserie, Chart-Objekte, Panel, Telegram-Grundlagen und JSON) |
+| `MQL4/Include/ScalpScout/Fern.mqh` | gemeinsame Funktionen von **ScalpScout und ScalpScout Asia** (Telegram-Fernsteuerung, gespeicherte Fern-Einstellungen, Tagesbericht, Positionsverwaltung); ScalpScout Trend hat eine eigene Umsetzung |
+| `kompilieren.sh` | kompiliert alle EAs unter Linux mit Wine und MetaEditor und zeigt Fehler/Warnungen (siehe „Kompilieren unter Linux“) |
 | `README.md` | diese Anleitung |
 | `.gitignore` | ignoriert `*.ex4` und `*.log` |
+
+**Wichtig:** Die EAs binden die Dateien aus `MQL4/Include/ScalpScout/` ein. Ohne diesen Ordner lässt sich keiner der EAs kompilieren. Eine Änderung in `Kern.mqh` wirkt auf alle drei EAs, eine Änderung in `Fern.mqh` auf ScalpScout und ScalpScout Asia; danach alle betroffenen EAs neu kompilieren.
 
 ## So arbeitet er
 
@@ -30,7 +35,7 @@ Der EA ist symbolneutral (EURUSD, GBPUSD, XAUUSD, DAX/US30 und andere, auch mit 
 ## Installation in MT4
 
 1. In MT4: **Datei → Datenordner öffnen**.
-2. `ScalpScout.mq4` nach `MQL4/Experts/` kopieren.
+2. `ScalpScout.mq4` nach `MQL4/Experts/` kopieren und den Ordner `ScalpScout` aus `MQL4/Include/` nach `MQL4/Include/` (es entsteht `MQL4/Include/ScalpScout/Kern.mqh` und `Fern.mqh`).
 3. MetaEditor öffnen (**F4**), Datei öffnen und mit **F7** kompilieren. Es darf kein Fehler erscheinen (Datei `ScalpScout.ex4` entsteht).
 4. In MT4 im Navigator mit Rechtsklick **Aktualisieren**.
 5. Oben in der Symbolleiste **„Algo-Trading“ (AutoTrading)** einschalten (Knopf muss grün sein).
@@ -83,7 +88,8 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 | `SL_ATR` | 1.0 | Stop-Loss in Vielfachen der ATR |
 | `TP_ATR` | 1.5 | Take-Profit in Vielfachen der ATR |
 | `BE_Aktiv` | true | Break-even an/aus |
-| `BE_ATR` | 0.8 | Break-even ab Gewinn von x × ATR |
+| `BE_SL_Faktor` | 1.0 | Break-even ab Gewinn von x × **anfänglichem SL-Abstand** dieser Position (ab ScalpScout 1.32 / Trend 1.12 / Asia 1.03); 0 = alte Regel über `BE_ATR` |
+| `BE_ATR` | 0.8 | Break-even ab Gewinn von x × ATR(M1); gilt nur bei `BE_SL_Faktor` = 0 oder ohne SL |
 | `BE_PufferPunkte` | 0 | Puffer über/unter dem Einstieg beim Break-even |
 | `TrailingAktiv` | false | Trailing-Stop an/aus |
 | `TrailingStartATR` | 1.0 | Trailing beginnt ab Gewinn von x × ATR |
@@ -96,7 +102,7 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 | `KommissionProLot` | 0.0 | Kommission pro Lot, Hin- und Rückweg zusammen, in Kontowährung (ECN-Konten); 0 = keine |
 | `HandelStart` | 08:00 | Beginn Handelsfenster (Serverzeit, HH:MM) |
 | `HandelEnde` | 20:00 | Ende Handelsfenster (Serverzeit); Fenster über Mitternacht ist möglich |
-| `TagesVerlustProzent` | 3.0 | Verlustlimit je Tag vom Tagesbeginn-Equity; danach keine neuen Trades bis zum nächsten Tag (0 = aus) |
+| `TagesVerlustProzent` | 3.0 | Verlustlimit je Tag in % vom Tagesbeginn-Equity, gemessen am **eigenen** Ergebnis dieses EAs (siehe Risiko-Hinweise); danach keine neuen Trades bis zum nächsten Tag (0 = aus) |
 | `MaxOffenePositionen` | 1 | Max. offene Positionen pro Symbol |
 | `PauseNachVerlusten` | 3 | Pause nach N Verlusten in Folge (0 = aus) |
 | `PauseMinuten` | 30 | Länge der Pause |
@@ -192,7 +198,7 @@ Der EA ist eine **eigene Datei** (`ScalpScoutTrend.mq4`) und läuft unabhängig 
 
 **Empfohlene Symbole:** Index-CFD auf den S&P 500 (z. B. US500/SPX500, Name beim Broker nachsehen) oder `EURUSD.ecn`. Welche Kosten (Spread, Kommission) im Verhältnis zu den Zielen anfallen, entscheidet über das CRV und damit darüber, wie oft überhaupt gehandelt wird.
 
-**Installation:** identisch zu `ScalpScout` (Datei nach `MQL4/Experts/`, mit F7 kompilieren, Navigator aktualisieren, AutoTrading an, EA auf einen M1-Chart ziehen, „Live-Handel erlauben“). Die Info-Box zeigt zusätzlich „Strategie: Trend-Pullback | Trend | AVWAP | Ziel“ und den Grund der letzten Prüfung.
+**Installation:** identisch zu `ScalpScout` (Datei nach `MQL4/Experts/`, Ordner `MQL4/Include/ScalpScout/` nach `MQL4/Include/`, mit F7 kompilieren, Navigator aktualisieren, AutoTrading an, EA auf einen M1-Chart ziehen, „Live-Handel erlauben“). Die Info-Box zeigt zusätzlich „Strategie: Trend-Pullback | Trend | AVWAP | Ziel“ und den Grund der letzten Prüfung.
 
 **Telegram:** Alle Nachrichten dieses EAs beginnen mit `[Trend]`. **Beide EAs nie mit demselben Telegram-Bot gleichzeitig betreiben**, sonst stehlen sie sich gegenseitig die Updates (JA/NEIN-Knöpfe kommen beim falschen EA an oder gehen verloren). Dafür bei @BotFather mit `/newbot` einen zweiten Bot anlegen und dessen Token in `ScalpScoutTrend` eintragen.
 
@@ -241,7 +247,7 @@ Die London-Phase lässt sich mit `LondonAktiv = false` abschalten. Um `SchlussZe
 3. **Phasen-Richtung:** Beim ersten gültigen Ausbruch steht die Richtung der Phase für den Rest des Tages fest, auch wenn dieses Signal abgelehnt, verworfen oder blockiert wurde. Gegenrichtung gibt es in dieser Phase nicht mehr.
 4. **Folge-Scalps** (`FolgeTradesAktiv`): Danach prüft der EA jede neue Kerze nur noch in Phasen-Richtung. Long, wenn die Kerze bullisch ist, über dem Hoch der letzten `FolgeAusbruchKerzen` (5) Kerzen schließt, das Volumen größer als `FolgeVolumenFaktor` × Durchschnitt ist und der Kurs noch auf der Ausbruchsseite der Range-Mitte liegt (über der Mitte bei Long, unter der Mitte bei Short). Der Trendfilter gilt hier nicht.
 5. **Stop-Loss/Take-Profit:** Beim Ausbruch liegt der SL in der Range-Mitte, höchstens `SL_MaxATR` (0.75) × ATR(H1) vom Einstieg entfernt. Beim Folge-Scalp ist der SL `FolgeSL_ATR` (1.0) × ATR(M1). Immer gilt: mindestens StopLevel + Spread des Brokers, TP = `TP_CRV` (1.5) × SL-Abstand.
-6. **Grenzen:** höchstens `MaxTradesProPhase` (10) Trades je Phase und Tag (Ausbruch und Folge-Scalps zusammen), `MaxOffenePositionen` (1) gleichzeitig, `CooldownMinuten` (2) Pause nach der letzten Eröffnung oder Schließung. Die Trades je Phase werden am **Order-Kommentar** gezählt (`SSA Tokio ORB`, `SSA Tokio Folge`, `SSA London ORB`, `SSA London Folge`; Offene Orders plus Historie des heutigen Tages), damit die Zahl auch nach einem Neustart stimmt. Hand-Trades (`SSA Hand`) zählen nicht mit.
+6. **Grenzen:** höchstens `MaxTradesProPhase` (10) Trades je Phase und Tag (Ausbruch und Folge-Scalps zusammen), `MaxOffenePositionen` (1) gleichzeitig, `CooldownMinuten` (2) Pause nach der letzten Eröffnung oder Schließung. Die Trades je Phase werden am **Order-Kommentar** gezählt (`SSA Tokio ORB`, `SSA Tokio Folge`, `SSA London ORB`, `SSA London Folge`; Offene Orders plus Historie des heutigen Tages), damit die Zahl auch nach einem Neustart stimmt. Hand-Trades (`SSA Hand`) zählen nicht mit. Hat der Broker den Kommentar überschrieben (z. B. bei Stop-out oder Teilschließung), ordnet der EA den Trade ab Version 1.01 über seine **Eröffnungszeit** dem Einstiegsfenster der Phase zu; im Zweifel zählt er mit, das Limit wird also eher strenger.
 7. **Spread-Automatik** (`MaxSpreadPunkte = 0`): Kosten (Spread + Kommission) müssen kleiner sein als `SpreadAnteilTP` × TP-Distanz des jeweiligen Trades.
 8. **Zeitausstieg:** Ab `SchlussZeit` schließt der EA einmal pro Tag alle eigenen Positionen auf diesem Symbol (mit Hinweis und Telegram-Nachricht „Zeitausstieg“), neue Einstiege sind danach blockiert. Leer = aus. Wird die Zeit per `/schluss` auf einen schon vergangenen Zeitpunkt gelegt, wirkt sie erst am nächsten Tag.
 9. Schutzfilter (Handelszeit = Tokio- **oder** London-Fenster, Tagesverlust-Limit, Pause nach Verlustserie, Kill-Switch, Telegram-Pause) gelten unverändert in allen Modi.
@@ -252,7 +258,7 @@ Die London-Phase lässt sich mit `LondonAktiv = false` abschalten. Um `SchlussZe
 
 **Ehrlicher Hinweis zu den Kosten:** Mehr Trades bedeuten mehr Spread (und Kommission). Bei kleinen Zielen wie hier frisst das schnell einen großen Teil des Gewinns; die Spread-Automatik sperrt zu teure Momente, kann aber nicht verhindern, dass viele kleine Verluste zusammenkommen. Auf einem kleinen Konto stoppt das Tagesverlust-Limit (`TagesVerlustProzent`, Standard 3 %) den EA schon nach wenigen Verlusten bis zum nächsten Serverzeit-Tag. Erst im Strategietester und auf Demo prüfen, ob die Folge-Scalps über Kosten hinweg etwas bringen. Sie lassen sich jederzeit mit `/folge aus` abschalten.
 
-**Inputs von ScalpScout Asia** (Gruppen Betrieb, Ausstieg, Risiko, Schutzfilter und Telegram wie oben; entfallen sind `ImpulsFaktor`, `BreakoutKerzen`, `EMA_Periode`, `SL_ATR`, `TP_ATR`; `ATR_Periode` gilt nur noch für M1-Folge-SL, Break-even, Trailing und die Preisabweichung des Signals):
+**Inputs von ScalpScout Asia** (Gruppen Betrieb, Ausstieg, Risiko, Schutzfilter und Telegram wie oben; entfallen sind `ImpulsFaktor`, `BreakoutKerzen`, `EMA_Periode`, `SL_ATR`, `TP_ATR`; `ATR_Periode` gilt nur noch für M1-Folge-SL, Trailing, den alten Break-even (`BE_SL_Faktor` = 0) und die Preisabweichung des Signals):
 
 | Input | Standard | Bedeutung |
 |---|---|---|
@@ -276,7 +282,7 @@ Die London-Phase lässt sich mit `LondonAktiv = false` abschalten. Um `SchlussZe
 | `MaxTradesProPhase` | 10 | Trades je Phase und Tag (Ausbruch + Folge) |
 | `MaxOffenePositionen` | 1 | gleichzeitig offene Positionen |
 | `CooldownMinuten` | 2 | Pause nach letzter Eröffnung/Schließung (0 = aus) |
-| `ATR_Periode` | 14 | ATR(M1) für Folge-SL, Break-even, Trailing, Preisabweichung |
+| `ATR_Periode` | 14 | ATR(M1) für Folge-SL, Trailing, alten Break-even, Preisabweichung |
 | `MagicNumber` | 26101803 | eigene Magic Number |
 
 Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE_FREIGABE` fragt der EA bei jedem Folge-Signal einzeln nach (Panel oder Telegram JA/NEIN); für aktives Scalpen ist `VOLLAUTOMATIK` nötig, die du nur nach ausführlichen Tests nutzen solltest.
@@ -300,7 +306,7 @@ Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE
 
 **Einrichtung:**
 
-1. `ScalpScoutAsia.mq4` nach `MQL4/Experts/` kopieren, mit F7 kompilieren (wie bei den anderen EAs).
+1. `ScalpScoutAsia.mq4` nach `MQL4/Experts/` und den Ordner `MQL4/Include/ScalpScout/` nach `MQL4/Include/` kopieren, mit F7 kompilieren (wie bei den anderen EAs).
 2. **USDJPY-M1-Chart** öffnen. **Symbolnamen beim Broker prüfen** (z. B. `USDJPY.ecn`); der EA arbeitet mit dem Symbol des Charts. Der M1-Verlauf muss mindestens bis zum Range-Beginn des Tages reichen (Chart nach oben scrollen, damit MT4 Historie lädt).
 3. **Eigenen Telegram-Bot** anlegen (@BotFather, `/newbot`) und dessen Token eintragen. **Pro EA ein Bot**, sonst stehlen sich die EAs gegenseitig die Updates (HTTP 409, JA/NEIN-Knöpfe kommen beim falschen EA an). Nachrichten beginnen mit `[Asia]`.
 4. Beim ersten Start `MANUELLE_FREIGABE` oder `NUR_SIGNALE` lassen.
@@ -316,7 +322,8 @@ Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE
 - **Kontobedingungen des Brokers prüfen:** Manche Broker verbieten oder begrenzen Scalping, Expert Advisors, Mindesthaltedauer von Positionen oder Handel kurz vor/nach News. Das muss vor dem Live-Einsatz mit den AGB geklärt sein.
 - **Keine Gewinnzusage.** Vergangene Ergebnisse sagen nichts über künftige aus. Das hier ist ein technisches Werkzeug, keine Anlageberatung.
 - Der EA braucht einen laufenden Rechner/VPS, Internet und eingeschaltetes Algo-Trading. Bei Verbindungsabbruch laufen offene Positionen nur mit ihrem SL/TP weiter.
-- Der Tagesverlust wird am Equity gemessen und schließt offene Gewinne/Verluste ein. Einzahlungen und Auszahlungen am selben Tag verfälschen die Zahl.
+- **Tagesverlust-Limit pro EA** (ab ScalpScout 1.31 / Trend 1.11 / Asia 1.02): Jeder EA zählt nur seine eigenen Trades (eigenes Symbol und eigene `MagicNumber`): heute geschlossene Trades plus offene Positionen, jeweils mit Swap und Kommission. Das Ergebnis wird in % vom Equity zu Tagesbeginn gerechnet. Verluste eines EAs sperren die anderen EAs also nicht; Hand-Trades ohne die Magic des EAs zählen nicht mit. „Tagesergebnis“ im Info-Bereich und in `/status` zeigt dieselbe Zahl. Ein Limit für das **ganze Konto** gibt es dadurch nicht mehr: Laufen drei EAs mit je 3 %, kann das Konto an einem Tag rund 9 % verlieren. `TagesVerlustProzent` entsprechend wählen.
+- Der Tagesbeginn ist Mitternacht Serverzeit. Ein Trade, der gestern eröffnet und heute geschlossen wurde, zählt vollständig zum heutigen Ergebnis.
 
 ## Annahmen und offene Punkte
 
@@ -327,11 +334,35 @@ Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE
 - Verlustserie: Wird aus der Konto-Historie gelesen; die Historie muss in MT4 (Reiter „Kontohistorie“, Zeitraum „Gesamte Historie“) verfügbar sein.
 - Telegram nutzt `WebRequest` und blockiert kurz (bis 5 s Zeitlimit je Anfrage). Abfragen laufen nur im Timer, Sendungen nur bei Ereignissen (Signal, Knopfdruck, Schließung). Nach einem Netzfehler pausiert Telegram 10 Sekunden. Im Strategietester ist Telegram aus.
 - Emoji in den Nachrichten sind im Quelltext direkt eingetragen (Datei ist UTF-8 mit BOM). Falls MetaEditor sie nicht korrekt lädt, erscheinen im Telegram nur Platzhalter; die Funktion bleibt davon unberührt.
-- Der Code wurde ohne Compiler geschrieben und von Hand geprüft. Bitte einmal in MetaEditor kompilieren und Warnungen/Fehler zurückmelden.
+- Kompiliert mit MetaEditor (MT4, unter Wine) am 2026-11-11: alle drei EAs `0 errors, 0 warnings`. Ein Lauf im Strategietester oder auf einem Konto steht noch aus.
+
+## Kompilieren unter Linux
+
+Voraussetzung: Wine und ein MT4 in einem eigenen Wine-Prefix `~/.wine-mt4`:
+
+```bash
+sudo pacman -S --needed wine
+curl -LO https://download.mql5.com/cdn/web/metaquotes.software.corp/mt4/mt4setup.exe
+WINEPREFIX=$HOME/.wine-mt4 wine mt4setup.exe /auto
+```
+
+Danach im Repo `./kompilieren.sh` (alle EAs) oder `./kompilieren.sh ScalpScoutAsia.mq4` (einer). Das Script ruft `metaeditor.exe /compile` mit `MQL4/` des Repos als Include-Pfad auf, zeigt je EA die Ergebniszeile und die Fehler/Warnungen und endet mit Code 1, wenn eine `.ex4` fehlt. Die `.ex4`- und `.log`-Dateien landen neben den Quellen und sind in `.gitignore`.
+
+## Backtest unter Linux
+
+Voraussetzung wie oben, dazu einmal MT4 mit `wine terminal.exe /portable` starten, ein Demokonto anlegen (z. B. MetaQuotes-Demo) und im Historienzentrum (F2) die M1-Daten der Symbole laden. Danach MT4 schließen und:
+
+```bash
+./backtest.py ScalpScoutAsia USDJPY 2026.08.01 2026.10.31 12 FolgeTradesAktiv=false --name Asia_ohneFolge
+```
+
+Argumente: EA, Symbol, Von, Bis, Spread in Punkten, danach beliebig viele `Input=Wert`. Die `.set`-Datei entsteht aus den Input-Standardwerten des EAs. MT4 startet den Tester selbst („Jeder Tick“, M1) und schließt sich danach. Der Bericht wird nach `tester-berichte/` kopiert (nicht im Repo), die Kennzahlen stehen auf der Konsole.
+
+Grenzen: Mit reinen M1-Daten erreicht „Jeder Tick“ nur **25 % Modellierungsqualität** (Ticks innerhalb einer Minute sind geschätzt). Der Tester zieht **keine Kommission** ab; bei ECN-Konten die Kommission in den Spread einrechnen.
 
 ## Fahrplan nächste Schritte
 
-1. In MetaEditor kompilieren (F7), Fehler/Warnungen beheben.
+1. ~~Kompilieren~~ erledigt (siehe oben).
 2. Backtest mit „Jeder Tick“ auf EURUSD und XAUUSD, mit realistischem Spread; Parameter nicht überoptimieren.
 3. **Demokonto**, Modus `NUR_SIGNALE`, mindestens 2 Wochen: Passen Signale zum Marktgefühl? Wie oft blockiert der Spreadfilter?
 4. Demokonto mit `MANUELLE_FREIGABE`, Push aktivieren, Journal auswerten (Trefferquote, CRV, Spread-Kosten).
