@@ -6,7 +6,7 @@
 //|  Handel auf eigenes Risiko.                                       |
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.00"
+#property version     "1.01"
 #property description "ScalpScout Asia - Tokio-/London-Range-Breakout (USDJPY, M1): Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung"
 #property strict
 
@@ -904,12 +904,17 @@ int MinutenJetzt()
 // Liegt die Serverzeit im Fenster [s, e)? Gleiche Zeiten = durchgehend, s > e = über Mitternacht
 bool InFenster(int s, int e)
 {
+   return MinutenInFenster(MinutenJetzt(), s, e);
+}
+
+// Liegt die Minute m (seit 00:00) im Fenster s..e (Ende exklusiv, über Mitternacht möglich, s == e: immer)?
+bool MinutenInFenster(int m, int s, int e)
+{
    if(s == e)
       return true;
-   int jetzt = MinutenJetzt();
    if(s < e)
-      return (jetzt >= s && jetzt < e);
-   return (jetzt >= s || jetzt < e);
+      return (m >= s && m < e);
+   return (m >= s || m < e);
 }
 
 bool PhaseFensterOK(int p)
@@ -966,11 +971,28 @@ void TradeZaehlen(datetime tag0)
          g_phTrades[p]++;
          if(g_phRicht[p] == 0 && StringFind(kom, "ORB") >= 0)
             g_phRicht[p] = (OrderType() == OP_BUY) ? 1 : -1;
+         return;
+      }
+   }
+   if(StringFind(kom, ORDER_KOMMENTAR) >= 0)
+      return;                                  // Hand-Trade: zählt nicht
+
+   // Kommentar vom Broker überschrieben (z. B. bei Stop-out oder Teilschließung): Phase über die
+   // Eröffnungszeit im Einstiegsfenster bestimmen. Im Zweifel zählt der Trade mit (Limit eher strenger).
+   int m = TimeHour(ot) * 60 + TimeMinute(ot);
+   for(int p = 0; p < 2; p++)
+   {
+      if(PhAktiv(p) && MinutenInFenster(m, PhEntryStart(p), PhEntryEnde(p)))
+      {
+         g_phTrades[p]++;
+         if(g_phRicht[p] == 0)                 // alle Trades einer Phase laufen in Phasen-Richtung
+            g_phRicht[p] = (OrderType() == OP_BUY) ? 1 : -1;
+         return;
       }
    }
 }
 
-// Trades je Phase heute (offene Orders + Historie, nach Order-Kommentar) und letzte Eröffnung/Schließung neu zählen
+// Trades je Phase heute (offene Orders + Historie, nach Order-Kommentar, ersatzweise Eröffnungszeit) und letzte Eröffnung/Schließung neu zählen
 void HeuteTradesAktualisieren()
 {
    g_phTrades[0]  = 0;
