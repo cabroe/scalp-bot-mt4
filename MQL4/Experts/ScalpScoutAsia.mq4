@@ -6,7 +6,7 @@
 //|  Handel auf eigenes Risiko.                                       |
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.01"
+#property version     "1.02"
 #property description "ScalpScout Asia - Tokio-/London-Range-Breakout (USDJPY, M1): Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung"
 #property strict
 
@@ -1368,7 +1368,7 @@ void TagPruefen()
    // Tageslimit einrasten (gilt bis zum nächsten Tag)
    if(!g_tagesLimit && g_tagesLimitProz > 0.0 && g_tagEquity > 0.0)
    {
-      double verlustProz = (g_tagEquity - AccountEquity()) / g_tagEquity * 100.0;
+      double verlustProz = (-EigenesTagesErgebnis()) / g_tagEquity * 100.0;
       if(verlustProz >= g_tagesLimitProz)
       {
          g_tagesLimit = true;
@@ -1685,7 +1685,7 @@ void UiAktualisieren()
    double maxSp  = MaxSpreadAktuell(0);
    double sp     = SpreadPunkte();
    double ko     = KommissionPunkte();
-   double diff   = AccountEquity() - g_tagEquity;
+   double diff   = EigenesTagesErgebnis();
    double proz   = (g_tagEquity > 0.0) ? diff / g_tagEquity * 100.0 : 0.0;
    string grund  = "";
    bool   frei   = HandelErlaubt(grund, 0);
@@ -1703,7 +1703,7 @@ void UiAktualisieren()
                 + (g_lonAktiv ? ", London " + MinutenText(g_lonStartMin) + "-" + MinutenText(g_lonEndeMin) : "")
                 + ((g_schlussMin >= 0) ? ", Schluss " + MinutenText(g_schlussMin) : "") + ")",
              ZeitfensterOK() ? clrLime : clrOrange);
-   InfoZeile(5, "Tagesergebnis: " + DoubleToString(diff, 2) + " " + AccountCurrency()
+   InfoZeile(5, "Tagesergebnis EA: " + DoubleToString(diff, 2) + " " + AccountCurrency()
                 + " (" + DoubleToString(proz, 2) + " %)", (diff >= 0.0) ? clrLime : clrOrangeRed);
    InfoZeile(6, g_tagesLimit ? "Verlustlimit: ERREICHT (" + LimitText(g_tagesLimitProz) + ")"
                              : "Verlustlimit: ok (max " + LimitText(g_tagesLimitProz) + ")",
@@ -1891,7 +1891,7 @@ string TgStatusText()
    double sp    = SpreadPunkte();
    double ko    = KommissionPunkte();
    double maxSp = MaxSpreadAktuell(0);
-   double diff  = AccountEquity() - g_tagEquity;
+   double diff  = EigenesTagesErgebnis();
    double proz  = (g_tagEquity > 0.0) ? diff / g_tagEquity * 100.0 : 0.0;
    string grund = "";
    bool   frei  = HandelErlaubt(grund, 0);
@@ -1928,7 +1928,7 @@ string TgStatusText()
         + "Phasen: " + HtmlEscape(PhasenZeile()) + "\n"
         + "Tokio jetzt: " + HtmlEscape(PhaseText(0)) + "\n"
         + "London jetzt: " + HtmlEscape(PhaseText(1)) + "\n"
-        + "Tagesergebnis: " + DoubleToString(diff, 2) + " " + AccountCurrency() + " (" + DoubleToString(proz, 2) + " %)\n"
+        + "Tagesergebnis (dieser EA): " + DoubleToString(diff, 2) + " " + AccountCurrency() + " (" + DoubleToString(proz, 2) + " %)\n"
         + "Offene Positionen: " + IntegerToString(ZaehlePositionen()) + " ("
         + DoubleToString(OffenerGewinn(), 2) + " " + AccountCurrency() + ")\n"
         + status;

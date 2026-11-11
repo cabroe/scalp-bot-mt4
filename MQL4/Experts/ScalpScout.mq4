@@ -5,7 +5,7 @@
 //|  vollautomatisch. Keine Gewinnzusage - Handel auf eigenes Risiko.|
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.30"
+#property version     "1.31"
 #property description "ScalpScout - M1-Scalping-Assistent (Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung, Retest-Einstieg)"
 #property strict
 
@@ -637,7 +637,7 @@ void TagPruefen()
    // Tageslimit einrasten (gilt bis zum nächsten Tag)
    if(!g_tagesLimit && g_tagesLimitProz > 0.0 && g_tagEquity > 0.0)
    {
-      double verlustProz = (g_tagEquity - AccountEquity()) / g_tagEquity * 100.0;
+      double verlustProz = (-EigenesTagesErgebnis()) / g_tagEquity * 100.0;
       if(verlustProz >= g_tagesLimitProz)
       {
          g_tagesLimit = true;
@@ -965,7 +965,7 @@ void UiAktualisieren()
    double maxSp  = MaxSpreadAktuell(atr);
    double sp     = SpreadPunkte();
    double ko     = KommissionPunkte();
-   double diff   = AccountEquity() - g_tagEquity;
+   double diff   = EigenesTagesErgebnis();
    double proz   = (g_tagEquity > 0.0) ? diff / g_tagEquity * 100.0 : 0.0;
    string grund  = "";
    bool   frei   = HandelErlaubt(grund, atr);
@@ -981,7 +981,7 @@ void UiAktualisieren()
    InfoZeile(4, "Serverzeit: " + TimeToString(TimeCurrent(), TIME_MINUTES)
                 + " (Handel " + MinutenText(g_startMin) + "-" + MinutenText(g_endeMin) + ")",
              ZeitfensterOK() ? clrLime : clrOrange);
-   InfoZeile(5, "Tagesergebnis: " + DoubleToString(diff, 2) + " " + AccountCurrency()
+   InfoZeile(5, "Tagesergebnis EA: " + DoubleToString(diff, 2) + " " + AccountCurrency()
                 + " (" + DoubleToString(proz, 2) + " %)", (diff >= 0.0) ? clrLime : clrOrangeRed);
    InfoZeile(6, g_tagesLimit ? "Verlustlimit: ERREICHT (" + LimitText(g_tagesLimitProz) + ")"
                              : "Verlustlimit: ok (max " + LimitText(g_tagesLimitProz) + ")",
@@ -1141,7 +1141,7 @@ string TgStatusText()
    double sp    = SpreadPunkte();
    double ko    = KommissionPunkte();
    double maxSp = MaxSpreadAktuell(atr);
-   double diff  = AccountEquity() - g_tagEquity;
+   double diff  = EigenesTagesErgebnis();
    double proz  = (g_tagEquity > 0.0) ? diff / g_tagEquity * 100.0 : 0.0;
    string grund = "";
    bool   frei  = HandelErlaubt(grund, atr);
@@ -1169,7 +1169,7 @@ string TgStatusText()
         + "Konto: Kontostand " + DoubleToString(AccountBalance(), 2) + ", Equity " + DoubleToString(AccountEquity(), 2)
         + ", freie Margin " + DoubleToString(AccountFreeMargin(), 2) + " " + AccountCurrency() + "\n"
         + "Kosten: " + KostenText(sp, ko) + " / max " + DoubleToString(maxSp, 1) + " Pkt\n"
-        + "Tagesergebnis: " + DoubleToString(diff, 2) + " " + AccountCurrency() + " (" + DoubleToString(proz, 2) + " %)\n"
+        + "Tagesergebnis (dieser EA): " + DoubleToString(diff, 2) + " " + AccountCurrency() + " (" + DoubleToString(proz, 2) + " %)\n"
         + "Offene Positionen: " + IntegerToString(ZaehlePositionen()) + " ("
         + DoubleToString(OffenerGewinn(), 2) + " " + AccountCurrency() + ")\n"
         + status;

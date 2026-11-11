@@ -101,7 +101,7 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 | `KommissionProLot` | 0.0 | Kommission pro Lot, Hin- und Rückweg zusammen, in Kontowährung (ECN-Konten); 0 = keine |
 | `HandelStart` | 08:00 | Beginn Handelsfenster (Serverzeit, HH:MM) |
 | `HandelEnde` | 20:00 | Ende Handelsfenster (Serverzeit); Fenster über Mitternacht ist möglich |
-| `TagesVerlustProzent` | 3.0 | Verlustlimit je Tag vom Tagesbeginn-Equity; danach keine neuen Trades bis zum nächsten Tag (0 = aus) |
+| `TagesVerlustProzent` | 3.0 | Verlustlimit je Tag in % vom Tagesbeginn-Equity, gemessen am **eigenen** Ergebnis dieses EAs (siehe Risiko-Hinweise); danach keine neuen Trades bis zum nächsten Tag (0 = aus) |
 | `MaxOffenePositionen` | 1 | Max. offene Positionen pro Symbol |
 | `PauseNachVerlusten` | 3 | Pause nach N Verlusten in Folge (0 = aus) |
 | `PauseMinuten` | 30 | Länge der Pause |
@@ -321,7 +321,8 @@ Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE
 - **Kontobedingungen des Brokers prüfen:** Manche Broker verbieten oder begrenzen Scalping, Expert Advisors, Mindesthaltedauer von Positionen oder Handel kurz vor/nach News. Das muss vor dem Live-Einsatz mit den AGB geklärt sein.
 - **Keine Gewinnzusage.** Vergangene Ergebnisse sagen nichts über künftige aus. Das hier ist ein technisches Werkzeug, keine Anlageberatung.
 - Der EA braucht einen laufenden Rechner/VPS, Internet und eingeschaltetes Algo-Trading. Bei Verbindungsabbruch laufen offene Positionen nur mit ihrem SL/TP weiter.
-- Der Tagesverlust wird am Equity gemessen und schließt offene Gewinne/Verluste ein. Einzahlungen und Auszahlungen am selben Tag verfälschen die Zahl.
+- **Tagesverlust-Limit pro EA** (ab ScalpScout 1.31 / Trend 1.11 / Asia 1.02): Jeder EA zählt nur seine eigenen Trades (eigenes Symbol und eigene `MagicNumber`): heute geschlossene Trades plus offene Positionen, jeweils mit Swap und Kommission. Das Ergebnis wird in % vom Equity zu Tagesbeginn gerechnet. Verluste eines EAs sperren die anderen EAs also nicht; Hand-Trades ohne die Magic des EAs zählen nicht mit. „Tagesergebnis“ im Info-Bereich und in `/status` zeigt dieselbe Zahl. Ein Limit für das **ganze Konto** gibt es dadurch nicht mehr: Laufen drei EAs mit je 3 %, kann das Konto an einem Tag rund 9 % verlieren. `TagesVerlustProzent` entsprechend wählen.
+- Der Tagesbeginn ist Mitternacht Serverzeit. Ein Trade, der gestern eröffnet und heute geschlossen wurde, zählt vollständig zum heutigen Ergebnis.
 
 ## Annahmen und offene Punkte
 

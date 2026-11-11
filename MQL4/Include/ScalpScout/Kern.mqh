@@ -551,6 +551,34 @@ double OffenerGewinn()
    return summe;
 }
 
+// Heutiges Ergebnis dieses EAs (eigenes Symbol + MagicNumber): seit Tagesbeginn g_tag geschlossene
+// Trades plus offene Positionen, jeweils inkl. Swap und Kommission. Grundlage für das Tagesverlust-
+// Limit und die Anzeige "Tagesergebnis". Andere EAs und Hand-Trades anderer Magic zählen nicht.
+// Der Historienteil wird nur neu gerechnet, wenn sich die Historie oder der Tag ändert.
+double EigenesTagesErgebnis()
+{
+   static int      s_anzahl = -1;
+   static datetime s_tag    = 0;
+   static double   s_hist   = 0.0;
+   int n = OrdersHistoryTotal();
+   if(n != s_anzahl || g_tag != s_tag)
+   {
+      s_anzahl = n;
+      s_tag    = g_tag;
+      s_hist   = 0.0;
+      for(int i = n - 1; i >= 0; i--)
+      {
+         if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
+            continue;
+         if(OrderSymbol() != Symbol() || OrderMagicNumber() != MagicNumber || OrderType() > OP_SELL)
+            continue;
+         if(OrderCloseTime() >= g_tag)
+            s_hist += OrderProfit() + OrderSwap() + OrderCommission();
+      }
+   }
+   return s_hist + OffenerGewinn();
+}
+
 // Text für die Info-Zeile "Telegram: ..."
 string TgInfoText(color &clr)
 {
