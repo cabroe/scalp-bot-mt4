@@ -216,7 +216,7 @@ void PositionenVerwalten()
       if(typ == OP_BUY)
       {
          double gewinn = Bid - offen;
-         if(g_beAktiv && gewinn >= BE_ATR * atr)
+         if(g_beAktiv && gewinn >= BeSchwelle(typ, offen, sl, atr))
          {
             double be = NormalizeDouble(offen + BE_PufferPunkte * Point, Digits);
             if(sl == 0.0 || be > sl + Point / 2.0)
@@ -234,7 +234,7 @@ void PositionenVerwalten()
       else
       {
          double gewinn = offen - Ask;
-         if(g_beAktiv && gewinn >= BE_ATR * atr)
+         if(g_beAktiv && gewinn >= BeSchwelle(typ, offen, sl, atr))
          {
             double be = NormalizeDouble(offen - BE_PufferPunkte * Point, Digits);
             if(sl == 0.0 || be < sl - Point / 2.0)

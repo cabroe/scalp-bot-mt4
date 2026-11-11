@@ -88,7 +88,8 @@ Im **Strategietester** wird `MANUELLE_FREIGABE` automatisch wie `VOLLAUTOMATIK` 
 | `SL_ATR` | 1.0 | Stop-Loss in Vielfachen der ATR |
 | `TP_ATR` | 1.5 | Take-Profit in Vielfachen der ATR |
 | `BE_Aktiv` | true | Break-even an/aus |
-| `BE_ATR` | 0.8 | Break-even ab Gewinn von x × ATR |
+| `BE_SL_Faktor` | 1.0 | Break-even ab Gewinn von x × **anfänglichem SL-Abstand** dieser Position (ab ScalpScout 1.32 / Trend 1.12 / Asia 1.03); 0 = alte Regel über `BE_ATR` |
+| `BE_ATR` | 0.8 | Break-even ab Gewinn von x × ATR(M1); gilt nur bei `BE_SL_Faktor` = 0 oder ohne SL |
 | `BE_PufferPunkte` | 0 | Puffer über/unter dem Einstieg beim Break-even |
 | `TrailingAktiv` | false | Trailing-Stop an/aus |
 | `TrailingStartATR` | 1.0 | Trailing beginnt ab Gewinn von x × ATR |
@@ -257,7 +258,7 @@ Die London-Phase lässt sich mit `LondonAktiv = false` abschalten. Um `SchlussZe
 
 **Ehrlicher Hinweis zu den Kosten:** Mehr Trades bedeuten mehr Spread (und Kommission). Bei kleinen Zielen wie hier frisst das schnell einen großen Teil des Gewinns; die Spread-Automatik sperrt zu teure Momente, kann aber nicht verhindern, dass viele kleine Verluste zusammenkommen. Auf einem kleinen Konto stoppt das Tagesverlust-Limit (`TagesVerlustProzent`, Standard 3 %) den EA schon nach wenigen Verlusten bis zum nächsten Serverzeit-Tag. Erst im Strategietester und auf Demo prüfen, ob die Folge-Scalps über Kosten hinweg etwas bringen. Sie lassen sich jederzeit mit `/folge aus` abschalten.
 
-**Inputs von ScalpScout Asia** (Gruppen Betrieb, Ausstieg, Risiko, Schutzfilter und Telegram wie oben; entfallen sind `ImpulsFaktor`, `BreakoutKerzen`, `EMA_Periode`, `SL_ATR`, `TP_ATR`; `ATR_Periode` gilt nur noch für M1-Folge-SL, Break-even, Trailing und die Preisabweichung des Signals):
+**Inputs von ScalpScout Asia** (Gruppen Betrieb, Ausstieg, Risiko, Schutzfilter und Telegram wie oben; entfallen sind `ImpulsFaktor`, `BreakoutKerzen`, `EMA_Periode`, `SL_ATR`, `TP_ATR`; `ATR_Periode` gilt nur noch für M1-Folge-SL, Trailing, den alten Break-even (`BE_SL_Faktor` = 0) und die Preisabweichung des Signals):
 
 | Input | Standard | Bedeutung |
 |---|---|---|
@@ -281,7 +282,7 @@ Die London-Phase lässt sich mit `LondonAktiv = false` abschalten. Um `SchlussZe
 | `MaxTradesProPhase` | 10 | Trades je Phase und Tag (Ausbruch + Folge) |
 | `MaxOffenePositionen` | 1 | gleichzeitig offene Positionen |
 | `CooldownMinuten` | 2 | Pause nach letzter Eröffnung/Schließung (0 = aus) |
-| `ATR_Periode` | 14 | ATR(M1) für Folge-SL, Break-even, Trailing, Preisabweichung |
+| `ATR_Periode` | 14 | ATR(M1) für Folge-SL, Trailing, alten Break-even, Preisabweichung |
 | `MagicNumber` | 26101803 | eigene Magic Number |
 
 Standard-`Modus` ist `MANUELLE_FREIGABE`, `TelegramAktiv` ist aus. Bei `MANUELLE_FREIGABE` fragt der EA bei jedem Folge-Signal einzeln nach (Panel oder Telegram JA/NEIN); für aktives Scalpen ist `VOLLAUTOMATIK` nötig, die du nur nach ausführlichen Tests nutzen solltest.

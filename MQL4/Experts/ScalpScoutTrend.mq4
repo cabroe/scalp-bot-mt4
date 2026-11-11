@@ -5,7 +5,7 @@
 //|  Keine Gewinnzusage - Handel auf eigenes Risiko.                 |
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.11"
+#property version     "1.12"
 #property description "ScalpScout Trend - M1-Scalping-Assistent: Trend-Pullback (AVWAP), manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung"
 #property strict
 
@@ -47,7 +47,8 @@ input string NewsPausen            = "";      // News-Pausen Serverzeit "HH:MM-H
 
 //--- Ausstieg
 input bool   BE_Aktiv              = true;    // Break-even aktivieren
-input double BE_ATR                = 0.8;     // Break-even ab Gewinn von x * ATR
+input double BE_SL_Faktor          = 1.0;     // Break-even ab Gewinn von x * anfänglichem SL-Abstand (0 = BE_ATR verwenden)
+input double BE_ATR                = 0.8;     // Break-even ab Gewinn von x * ATR (nur bei BE_SL_Faktor = 0 oder ohne SL)
 input int    BE_PufferPunkte       = 0;       // Break-even: Puffer über/unter Einstieg (Punkte)
 input bool   TrailingAktiv         = false;   // Trailing-Stop aktivieren
 input double TrailingStartATR      = 1.0;     // Trailing startet ab Gewinn von x * ATR
@@ -1168,7 +1169,7 @@ void PositionenVerwalten()
       if(typ == OP_BUY)
       {
          double gewinn = Bid - offen;
-         if(g_beAktiv && gewinn >= BE_ATR * atr)
+         if(g_beAktiv && gewinn >= BeSchwelle(typ, offen, sl, atr))
          {
             double be = NormalizeDouble(offen + BE_PufferPunkte * Point, Digits);
             if(sl == 0.0 || be > sl + Point / 2.0)
@@ -1186,7 +1187,7 @@ void PositionenVerwalten()
       else
       {
          double gewinn = offen - Ask;
-         if(g_beAktiv && gewinn >= BE_ATR * atr)
+         if(g_beAktiv && gewinn >= BeSchwelle(typ, offen, sl, atr))
          {
             double be = NormalizeDouble(offen - BE_PufferPunkte * Point, Digits);
             if(sl == 0.0 || be < sl - Point / 2.0)
@@ -3270,7 +3271,7 @@ int OnInit()
    if(ATR_Periode < 1 || SwingStaerke < 1 || SwingLookback < 2 * SwingStaerke + 10 || M5_EMA_Periode < 1 ||
       VWAP_NaeheATR < 0.0 || DoppelLunteToleranzATR < 0.0 || SL_PufferATR < 0.0 || TP_PufferATR < 0.0 ||
       MinCRV <= 0.0 || RisikoProzent <= 0.0 || MaxLot <= 0.0 || MaxOffenePositionen < 1 || SignalGueltigSek < 1 ||
-      KommissionProLot < 0.0 || FernMaxLotObergrenze < 0.0)
+      KommissionProLot < 0.0 || FernMaxLotObergrenze < 0.0 || BE_SL_Faktor < 0.0)
    {
       Alert("ScalpScout Trend: Ungültige Eingabewerte (Perioden, SwingStaerke >= 1, SwingLookback >= 2*SwingStaerke+10, MinCRV, Risiko, MaxLot müssen > 0 sein; Puffer/Kommission nicht negativ).");
       return INIT_PARAMETERS_INCORRECT;

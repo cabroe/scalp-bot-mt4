@@ -5,7 +5,7 @@
 //|  vollautomatisch. Keine Gewinnzusage - Handel auf eigenes Risiko.|
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.31"
+#property version     "1.32"
 #property description "ScalpScout - M1-Scalping-Assistent (Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung, Retest-Einstieg)"
 #property strict
 
@@ -55,7 +55,8 @@ input double RetestTP_CRV          = 1.8;     // Retest: TP = x * SL-Abstand (1.
 input double SL_ATR                = 1.0;     // Stop-Loss = x * ATR
 input double TP_ATR                = 1.5;     // Take-Profit = x * ATR
 input bool   BE_Aktiv              = true;    // Break-even aktivieren
-input double BE_ATR                = 0.8;     // Break-even ab Gewinn von x * ATR
+input double BE_SL_Faktor          = 1.0;     // Break-even ab Gewinn von x * anfänglichem SL-Abstand (0 = BE_ATR verwenden)
+input double BE_ATR                = 0.8;     // Break-even ab Gewinn von x * ATR (nur bei BE_SL_Faktor = 0 oder ohne SL)
 input int    BE_PufferPunkte       = 0;       // Break-even: Puffer über/unter Einstieg (Punkte)
 input bool   TrailingAktiv         = false;   // Trailing-Stop aktivieren
 input double TrailingStartATR      = 1.0;     // Trailing startet ab Gewinn von x * ATR
@@ -1949,7 +1950,7 @@ int OnInit()
    if(ATR_Periode < 1 || EMA_Periode < 1 || VolumenKerzen < 1 || BreakoutKerzen < 1 ||
       ImpulsFaktor <= 0.0 || VolumenFaktor <= 0.0 || SL_ATR <= 0.0 || TP_ATR <= 0.0 ||
       RisikoProzent <= 0.0 || MaxLot <= 0.0 || FernMaxLotObergrenze <= 0.0 || MaxOffenePositionen < 1 || SignalGueltigSek < 1 ||
-      KommissionProLot < 0.0)
+      KommissionProLot < 0.0 || BE_SL_Faktor < 0.0)
    {
       Alert("ScalpScout: Ungültige Eingabewerte (Perioden, Faktoren, Risiko, MaxLot müssen > 0 sein, Kommission nicht negativ).");
       return INIT_PARAMETERS_INCORRECT;

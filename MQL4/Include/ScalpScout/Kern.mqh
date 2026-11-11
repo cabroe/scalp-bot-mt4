@@ -538,6 +538,20 @@ string TgTastatur(int id)
 }
 
 // Gewinn/Verlust aller offenen eigenen Positionen auf diesem Symbol
+// Gewinn (Preisabstand), ab dem der Break-even greift. Standard: BE_SL_Faktor x Abstand Einstieg-SL,
+// solange der SL noch auf der Verlustseite liegt (dann ist das der anfängliche Stop-Abstand).
+// Ohne SL oder mit BE_SL_Faktor = 0: alte Regel BE_ATR x ATR(M1).
+double BeSchwelle(int typ, double offen, double sl, double atr)
+{
+   if(BE_SL_Faktor > 0.0 && sl > 0.0)
+   {
+      double risiko = (typ == OP_BUY) ? offen - sl : sl - offen;
+      if(risiko > 0.0)
+         return BE_SL_Faktor * risiko;
+   }
+   return BE_ATR * atr;
+}
+
 double OffenerGewinn()
 {
    double summe = 0.0;

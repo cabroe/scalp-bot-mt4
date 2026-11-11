@@ -6,7 +6,7 @@
 //|  Handel auf eigenes Risiko.                                       |
 //+------------------------------------------------------------------+
 #property copyright   "maehrsteuern"
-#property version     "1.02"
+#property version     "1.03"
 #property description "ScalpScout Asia - Tokio-/London-Range-Breakout (USDJPY, M1): Signal, manuelle Freigabe, Vollautomatik, Telegram-Fernsteuerung"
 #property strict
 
@@ -60,7 +60,8 @@ input double TP_CRV                = 1.5;     // Take-Profit-Abstand = x * Stop-
 input string SchlussZeit           = "13:00"; // Zeitausstieg: alle Positionen schließen (Serverzeit, HH:MM, leer = aus)
 input int    ATR_Periode           = 14;      // ATR-Periode (M1): für Folge-SL, Break-even, Trailing und Preisabweichung des Signals
 input bool   BE_Aktiv              = true;    // Break-even aktivieren
-input double BE_ATR                = 0.8;     // Break-even ab Gewinn von x * ATR(M1)
+input double BE_SL_Faktor          = 1.0;     // Break-even ab Gewinn von x * anfänglichem SL-Abstand (0 = BE_ATR verwenden)
+input double BE_ATR                = 0.8;     // Break-even ab Gewinn von x * ATR(M1) (nur bei BE_SL_Faktor = 0 oder ohne SL)
 input int    BE_PufferPunkte       = 0;       // Break-even: Puffer über/unter Einstieg (Punkte)
 input bool   TrailingAktiv         = false;   // Trailing-Stop aktivieren
 input double TrailingStartATR      = 1.0;     // Trailing startet ab Gewinn von x * ATR(M1)
@@ -2573,7 +2574,7 @@ int OnInit()
       RangeMinATR <= 0.0 || RangeMaxATR <= RangeMinATR || LondonRangeMinATR <= 0.0 || LondonRangeMaxATR <= LondonRangeMinATR ||
       AusbruchPufferPips < 0.0 || SL_MaxATR <= 0.0 || TP_CRV <= 0.0 || MaxTradesProPhase < 1 || CooldownMinuten < 0 ||
       RisikoProzent <= 0.0 || MaxLot <= 0.0 || FernMaxLotObergrenze <= 0.0 || MaxOffenePositionen < 1 || SignalGueltigSek < 1 ||
-      KommissionProLot < 0.0)
+      KommissionProLot < 0.0 || BE_SL_Faktor < 0.0)
    {
       Alert("ScalpScout Asia: Ungültige Eingabewerte (Perioden, Faktoren, SL_MaxATR, TP_CRV, Risiko, MaxLot müssen > 0 sein, Range-Max > Range-Min, MaxTradesProPhase >= 1, Puffer/Cooldown/Kommission nicht negativ).");
       return INIT_PARAMETERS_INCORRECT;
